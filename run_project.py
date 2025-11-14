@@ -34,7 +34,16 @@ def main():
 
             elif choice == "3":
                 print("\nImporting dataset...")
-                subprocess.run([sys.executable, "import_all_datasets.py"])
+                print("Choose import type:")
+                print("a. Individual datasets (limited samples)")
+                print("b. Bulk import (all available datasets)")
+                import_choice = input("Enter a or b: ").strip().lower()
+                if import_choice == "a":
+                    subprocess.run([sys.executable, "import_datasets.py", "--individual"])
+                elif import_choice == "b":
+                    subprocess.run([sys.executable, "import_datasets.py", "--bulk"])
+                else:
+                    print("Invalid choice, skipping import.")
 
             elif choice == "4":
                 print("\nPreprocessing data with augmentation...")
@@ -42,11 +51,35 @@ def main():
 
             elif choice == "5":
                 print("\nChecking dataset accuracy...")
-                subprocess.run([sys.executable, "debug_accuracy.py"])
+                print("Choose accuracy check type:")
+                print("a. Basic accuracy check")
+                print("b. Comprehensive metrics")
+                print("c. Debug mode (balanced, no warnings)")
+                acc_choice = input("Enter a, b, or c: ").strip().lower()
+                if acc_choice == "a":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--basic"])
+                elif acc_choice == "b":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--comprehensive"])
+                elif acc_choice == "c":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--debug"])
+                else:
+                    print("Invalid choice, skipping accuracy check.")
 
             elif choice == "6":
                 print("\nEvaluating model...")
-                subprocess.run([sys.executable, "evaluate_dataset.py"])
+                print("Choose evaluation type:")
+                print("a. Basic evaluation")
+                print("b. Comprehensive evaluation")
+                print("c. Debug evaluation")
+                eval_choice = input("Enter a, b, or c: ").strip().lower()
+                if eval_choice == "a":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--basic"])
+                elif eval_choice == "b":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--comprehensive"])
+                elif eval_choice == "c":
+                    subprocess.run([sys.executable, "evaluate_model.py", "--debug"])
+                else:
+                    print("Invalid choice, skipping evaluation.")
 
             elif choice == "7":
                 print("\nGoodbye!")

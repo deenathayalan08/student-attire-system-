@@ -3,15 +3,21 @@
 Script to import existing datasets into the student attire verification app's dataset collection system.
 This will extract features from images in the datasets/ and combined_dataset/ folders and add them
 to the app's metadata.csv for ML training.
+
+Usage:
+    python import_datasets.py --individual  # Import from individual dataset folders
+    python import_datasets.py --bulk        # Import from all available datasets (bulk import)
 """
 
 import os
 import sys
+import argparse
 from pathlib import Path
 import cv2
 import pandas as pd
 from PIL import Image
 import numpy as np
+from tqdm import tqdm
 
 # Add project root to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -78,10 +84,8 @@ def import_dataset_images(dataset_path: Path, label: str, cfg: AppConfig, max_im
     return imported_count
 
 
-def main():
-    cfg = AppConfig()
-    ensure_dirs(cfg)
-
+def import_individual_datasets(cfg: AppConfig):
+    """Import from individual dataset folders with limited samples."""
     total_imported = 0
 
     # Import from combined_dataset
@@ -111,6 +115,100 @@ def main():
         dataset_path = Path(dataset_folder)
         count = import_dataset_images(dataset_path, label, cfg, max_images=50)  # Limit for testing
         total_imported += count
+
+    return total_imported
+
+
+def import_bulk_datasets(cfg: AppConfig):
+    """Import from all available datasets (bulk import)."""
+    datasets_to_import = [
+        ('datasets/train', 'compliant'),  # Assuming train has compliant samples
+        ('datasets/valid', 'compliant'),  # Assuming valid has compliant samples
+        ('datasets/test', 'non-compliant'),  # Assuming test has non-compliant samples
+        ('datasets/footwears/train', 'compliant'),  # Footwear compliance
+        ('datasets/uniform 1/train', 'compliant'),
+        ('datasets/uniform 1/valid', 'compliant'),
+        ('datasets/uniform 1/test', 'non-compliant'),
+        ('datasets/uniform 2/train', 'compliant'),
+        ('datasets/uniform 2/valid', 'compliant'),
+        ('datasets/uniform 2/test', 'non-compliant'),
+    ]
+
+    total_imported = 0
+
+    for folder, label in datasets_to_import:
+        if os.path.exists(folder):
+            imported = import_dataset_folder(folder, label, cfg, max_samples=1000)  # Limit to prevent excessive processing
+            total_imported += imported
+        else:
+            print(f"Skipping {folder} - does not exist")
+
+    return total_imported
+
+
+def import_dataset_folder(folder_path: str, label: str, cfg: AppConfig, max_samples: int = None):
+    """Import images from a dataset folder."""
+    folder_path = Path(folder_path)
+    if not folder_path.exists():
+        print(f"Folder {folder_path} does not exist")
+        return 0
+
+    print(f"Importing from {folder_path} with label '{label}'...")
+
+    image_files = []
+    for ext in ['*.jpg', '*.jpeg', '*.png']:
+        image_files.extend(list(folder_path.rglob(ext)))
+
+    if max_samples:
+        image_files = image_files[:max_samples]
+
+    imported = 0
+    for img_path in tqdm(image_files, desc=f"Importing {label}"):
+        try:
+            # Load image
+            pil_img = cv2.imread(str(img_path))
+            if pil_img is None:
+                continue
+
+            # Convert to RGB for PIL compatibility
+            rgb_img = cv2.cvtColor(pil_img, cv2.COLOR_BGR2RGB)
+
+            # Extract features
+            pose = extract_pose(pil_img)
+            features = extract_features_from_image(pil_img, pose_landmarks=pose, bins=cfg.hist_bins)
+
+            # Append to dataset
+            append_sample_to_dataset(pil_img, label, features, cfg)
+            imported += 1
+
+        except Exception as e:
+            print(f"Error importing {img_path}: {e}")
+            continue
+
+    print(f"Imported {imported} samples from {folder_path}")
+    return imported
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Import datasets for student attire verification")
+    parser.add_argument('--individual', action='store_true', help='Import from individual dataset folders')
+    parser.add_argument('--bulk', action='store_true', help='Import from all available datasets (bulk import)')
+
+    args = parser.parse_args()
+
+    if not args.individual and not args.bulk:
+        print("Please specify --individual or --bulk")
+        return
+
+    cfg = AppConfig()
+    ensure_dirs(cfg)
+
+    if args.individual:
+        print("Starting individual dataset import...")
+        total_imported = import_individual_datasets(cfg)
+    elif args.bulk:
+        print("Starting bulk dataset import...")
+        total_imported = import_bulk_datasets(cfg)
 
     print(f"\nTotal images imported: {total_imported}")
 
