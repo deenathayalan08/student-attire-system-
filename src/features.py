@@ -234,5 +234,264 @@ def extract_features_from_image(bgr_image: np.ndarray, pose_landmarks=None, bins
 		features["id_card_detected"] = 0.0
 		features["id_card_confidence"] = 0.0
 		features["id_card_area"] = 0.0
-	
+
+	# Enhanced features for haircut, beard, and jewelry detection
+	features.update(_extract_facial_features(bgr_image, pose_landmarks))
+	features.update(_extract_jewelry_features(bgr_image, pose_landmarks))
+
+	return features
+
+
+def _extract_facial_features(bgr_image: np.ndarray, pose_landmarks=None) -> Dict[str, Any]:
+	"""
+	Extract facial features for haircut and beard detection using face landmarks
+	"""
+	features = {}
+
+	try:
+		import mediapipe as mp
+		mp_face_mesh = mp.solutions.face_mesh
+		face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True)
+
+		rgb_image = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+		results = face_mesh.process(rgb_image)
+
+		if results.multi_face_landmarks:
+			face_landmarks = results.multi_face_landmarks[0]
+			h, w = bgr_image.shape[:2]
+
+			# Convert landmarks to pixel coordinates
+			landmarks = [(int(lm.x * w), int(lm.y * h)) for lm in face_landmarks.landmark]
+
+			# Haircut detection - analyze hair region above forehead
+			# Use landmarks around forehead and hairline
+			forehead_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454]  # forehead landmarks
+			if len(landmarks) > max(forehead_indices):
+				forehead_points = [landmarks[i] for i in forehead_indices if i < len(landmarks)]
+				if forehead_points:
+					# Calculate forehead region
+					x_coords = [p[0] for p in forehead_points]
+					y_coords = [p[1] for p in forehead_points]
+
+					forehead_left = min(x_coords)
+					forehead_right = max(x_coords)
+					forehead_top = min(y_coords) - 20  # Extend above forehead
+					forehead_bottom = max(y_coords)
+
+					# Ensure bounds are within image
+					forehead_top = max(0, forehead_top)
+					forehead_bottom = min(h, forehead_bottom)
+					forehead_left = max(0, forehead_left)
+					forehead_right = min(w, forehead_right)
+
+					if forehead_bottom > forehead_top and forehead_right > forehead_left:
+						hair_region = bgr_image[forehead_top:forehead_bottom, forehead_left:forehead_right]
+
+						if hair_region.size > 0:
+							# Analyze hair region for haircut compliance
+							hsv_hair = cv2.cvtColor(hair_region, cv2.COLOR_BGR2HSV)
+							hair_h, hair_s, hair_v = cv2.split(hsv_hair)
+
+							# Hair should be dark (low value) and possibly have some texture
+							mean_hair_v = np.mean(hair_v)
+							std_hair_v = np.std(hair_v)
+
+							# Simple heuristic: well-groomed hair is darker and more uniform
+							hair_darkness_score = 1.0 - (mean_hair_v / 255.0)  # Darker is better
+							hair_uniformity_score = 1.0 - min(std_hair_v / 50.0, 1.0)  # More uniform is better
+
+							features["hair_darkness_score"] = float(hair_darkness_score)
+							features["hair_uniformity_score"] = float(hair_uniformity_score)
+							features["haircut_compliance_score"] = float((hair_darkness_score + hair_uniformity_score) / 2.0)
+						else:
+							features["hair_darkness_score"] = 0.0
+							features["hair_uniformity_score"] = 0.0
+							features["haircut_compliance_score"] = 0.0
+					else:
+						features["hair_darkness_score"] = 0.0
+						features["hair_uniformity_score"] = 0.0
+						features["haircut_compliance_score"] = 0.0
+				else:
+					features["hair_darkness_score"] = 0.0
+					features["hair_uniformity_score"] = 0.0
+					features["haircut_compliance_score"] = 0.0
+			else:
+				features["hair_darkness_score"] = 0.0
+				features["hair_uniformity_score"] = 0.0
+				features["haircut_compliance_score"] = 0.0
+
+			# Beard detection - analyze chin and jaw region
+			chin_indices = [152, 377, 400, 378, 379, 365, 397, 288, 361, 323]  # chin/jaw landmarks
+			if len(landmarks) > max(chin_indices):
+				chin_points = [landmarks[i] for i in chin_indices if i < len(landmarks)]
+				if chin_points:
+					x_coords = [p[0] for p in chin_points]
+					y_coords = [p[1] for p in chin_points]
+
+					chin_left = min(x_coords)
+					chin_right = max(x_coords)
+					chin_top = min(y_coords)
+					chin_bottom = max(y_coords) + 10  # Extend below chin
+
+					# Ensure bounds are within image
+					chin_top = max(0, chin_top)
+					chin_bottom = min(h, chin_bottom)
+					chin_left = max(0, chin_left)
+					chin_right = min(w, chin_right)
+
+					if chin_bottom > chin_top and chin_right > chin_left:
+						beard_region = bgr_image[chin_top:chin_bottom, chin_left:chin_right]
+
+						if beard_region.size > 0:
+							hsv_beard = cv2.cvtColor(beard_region, cv2.COLOR_BGR2HSV)
+							beard_h, beard_s, beard_v = cv2.split(hsv_beard)
+
+							# Beard analysis: look for facial hair characteristics
+							mean_beard_v = np.mean(beard_v)
+							std_beard_v = np.std(beard_v)
+							mean_beard_s = np.mean(beard_s)
+
+							# Facial hair tends to be darker and have texture
+							beard_darkness = 1.0 - (mean_beard_v / 255.0)
+							beard_texture = std_beard_v / 50.0  # Texture indicator
+
+							# Clean-shaven faces have higher brightness and lower texture
+							beard_score = (beard_darkness + beard_texture) / 2.0
+
+							features["beard_darkness"] = float(beard_darkness)
+							features["beard_texture"] = float(beard_texture)
+							features["beard_presence_score"] = float(beard_score)
+						else:
+							features["beard_darkness"] = 0.0
+							features["beard_texture"] = 0.0
+							features["beard_presence_score"] = 0.0
+					else:
+						features["beard_darkness"] = 0.0
+						features["beard_texture"] = 0.0
+						features["beard_presence_score"] = 0.0
+				else:
+					features["beard_darkness"] = 0.0
+					features["beard_texture"] = 0.0
+					features["beard_presence_score"] = 0.0
+			else:
+				features["beard_darkness"] = 0.0
+				features["beard_texture"] = 0.0
+				features["beard_presence_score"] = 0.0
+		else:
+			# No face detected
+			features["hair_darkness_score"] = 0.0
+			features["hair_uniformity_score"] = 0.0
+			features["haircut_compliance_score"] = 0.0
+			features["beard_darkness"] = 0.0
+			features["beard_texture"] = 0.0
+			features["beard_presence_score"] = 0.0
+
+		face_mesh.close()
+
+	except ImportError:
+		# Fallback if MediaPipe face mesh is not available
+		features["hair_darkness_score"] = 0.0
+		features["hair_uniformity_score"] = 0.0
+		features["haircut_compliance_score"] = 0.0
+		features["beard_darkness"] = 0.0
+		features["beard_texture"] = 0.0
+		features["beard_presence_score"] = 0.0
+
+	return features
+
+
+def _extract_jewelry_features(bgr_image: np.ndarray, pose_landmarks=None) -> Dict[str, Any]:
+	"""
+	Extract features for jewelry detection, focusing on neck area for chains
+	"""
+	features = {}
+
+	h, w = bgr_image.shape[:2]
+
+	# Define neck region based on pose landmarks or fallback
+	if pose_landmarks is not None:
+		pts = [(lm.x * w, lm.y * h) for lm in pose_landmarks.landmark]
+		if len(pts) > 24:  # Has shoulder landmarks
+			left_shoulder = pts[11]
+			right_shoulder = pts[12]
+
+			# Neck region between shoulders, below chin
+			neck_left = int(left_shoulder[0])
+			neck_right = int(right_shoulder[0])
+			neck_top = int(min(left_shoulder[1], right_shoulder[1]))
+			neck_bottom = int(max(left_shoulder[1], right_shoulder[1]) + 30)  # Extend below shoulders
+		else:
+			# Fallback to center neck region
+			neck_left = int(0.35 * w)
+			neck_right = int(0.65 * w)
+			neck_top = int(0.25 * h)
+			neck_bottom = int(0.4 * h)
+	else:
+		# Fallback to center neck region
+		neck_left = int(0.35 * w)
+		neck_right = int(0.65 * w)
+		neck_top = int(0.25 * h)
+		neck_bottom = int(0.4 * h)
+
+	# Ensure bounds are within image
+	neck_left = max(0, neck_left)
+	neck_right = min(w, neck_right)
+	neck_top = max(0, neck_top)
+	neck_bottom = min(h, neck_bottom)
+
+	if neck_bottom > neck_top and neck_right > neck_left:
+		neck_region = bgr_image[neck_top:neck_bottom, neck_left:neck_right]
+
+		if neck_region.size > 0:
+			# Convert to HSV for color analysis
+			hsv_neck = cv2.cvtColor(neck_region, cv2.COLOR_BGR2HSV)
+			neck_h, neck_s, neck_v = cv2.split(hsv_neck)
+
+			# Jewelry detection heuristics
+			mean_h = np.mean(neck_h)
+			mean_s = np.mean(neck_s)
+			mean_v = np.mean(neck_v)
+			std_h = np.std(neck_h)
+			std_s = np.std(neck_s)
+
+			# Metallic jewelry (chains) characteristics:
+			# - High saturation (metallic shine/reflection)
+			# - Variable hue (silver/gold have different hues)
+			# - High value (brightness from reflection)
+			# - Some texture from chain links
+
+			# Silver chain detection: low hue, high saturation, high brightness
+			silver_score = 0.0
+			if mean_s > 100 and mean_v > 150:
+				if mean_h < 30 or mean_h > 150:  # Silver typically has low or high hue
+					silver_score = min(mean_s / 255.0, mean_v / 255.0)
+
+			# Gold chain detection: yellow/orange hue, high saturation
+			gold_score = 0.0
+			if mean_s > 120 and 20 < mean_h < 50:  # Yellow-orange range
+				gold_score = min(mean_s / 255.0, (50 - abs(mean_h - 35)) / 50.0)
+
+			# Overall jewelry presence score
+			jewelry_score = max(silver_score, gold_score)
+
+			# Texture analysis for chain detection
+			gray_neck = cv2.cvtColor(neck_region, cv2.COLOR_BGR2GRAY)
+			laplacian = cv2.Laplacian(gray_neck, cv2.CV_64F)
+			texture_score = np.var(laplacian) / 1000.0  # Normalize texture
+
+			features["neck_silver_chain_score"] = float(silver_score)
+			features["neck_gold_chain_score"] = float(gold_score)
+			features["neck_jewelry_presence_score"] = float(jewelry_score)
+			features["neck_texture_score"] = float(texture_score)
+		else:
+			features["neck_silver_chain_score"] = 0.0
+			features["neck_gold_chain_score"] = 0.0
+			features["neck_jewelry_presence_score"] = 0.0
+			features["neck_texture_score"] = 0.0
+	else:
+		features["neck_silver_chain_score"] = 0.0
+		features["neck_gold_chain_score"] = 0.0
+		features["neck_jewelry_presence_score"] = 0.0
+		features["neck_texture_score"] = 0.0
+
 	return features

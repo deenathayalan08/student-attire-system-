@@ -35,7 +35,7 @@ class AppConfig:
 	require_footwear_female: bool = False  # sandals or shoes acceptable; not mandatory
 	require_black_shoes_male: bool = True  # Require black shoes for males
 	allow_any_color_pants_male: bool = True  # Allow any color pants for males (instead of only dark)
-	
+
 	# Security & Safety Features
 	enable_unauthorized_entry_alerts: bool = True
 	enable_late_entry_tracking: bool = True
@@ -50,6 +50,55 @@ class AppConfig:
 	campus_longitude: float = 0.0
 	campus_radius_meters: float = 500.0  # Radius in meters
 
+	# Enhanced Attire Verification Features
+	enable_gender_specific_checks: bool = True
+	enable_haircut_beard_detection: bool = True
+	enable_haircut_detection: bool = True
+	enable_beard_detection: bool = True
+	enable_jewelry_detection: bool = True
+	enable_biometric_verification: bool = True
+	enable_casual_uniform_policy: bool = True
+	enable_pdf_reports: bool = True
+
+	# Casual/Uniform Day Policy
+	uniform_days: List[str] = None  # ["wednesday"] - filled in __post_init__
+	casual_days: List[str] = None  # ["friday"] - filled in __post_init__
+
+	# Gender-specific policy settings
+	# Male attire requirements
+	require_haircut_check_male: bool = True
+	require_beard_check_male: bool = True
+	require_tuck_in_male: bool = True
+	allow_chains_male: bool = False  # No silver/gold chains allowed
+
+	# Female attire requirements
+	require_sandals_check_female: bool = True
+	allow_jewelry_female: bool = True
+
+	# Grooming policy settings
+	haircut_required: bool = True
+	beard_policy: str = "clean_shaven"  # clean_shaven, trimmed, no_policy
+	jewelry_policy: str = "no_jewelry"  # no_jewelry, allowed
+	haircut_compliance_threshold: float = 0.8
+	beard_tolerance_threshold: float = 0.2
+	jewelry_tolerance_threshold: float = 0.2
+
+	# Biometric settings
+	biometric_registration_required: bool = True
+	biometric_verification_threshold: float = 0.8
+	biometric_threshold: float = 0.8  # Threshold for verification in verify_attire_and_safety
+	biometric_required: bool = True  # Whether biometric verification is mandatory
+
+	# College information
+	college_name: str = "Student College"
+	college_address: str = "College Address"
+	college_phone: str = "College Phone"
+	college_email: str = "college@example.com"
+
+	# Report settings
+	report_template_path: Path = Path("templates/report_template.html")
+	reports_dir: Path = Path("reports")
+
 	# Paths
 	data_dir: Path = Path("data")
 	images_dir: Path = Path("data/images")
@@ -60,3 +109,7 @@ class AppConfig:
 	def __post_init__(self):
 		if self.zones is None:
 			self.zones = ["Gate", "Classroom", "Lab", "Sports"]
+		if self.uniform_days is None:
+			self.uniform_days = ["wednesday"]
+		if self.casual_days is None:
+			self.casual_days = ["friday"]
