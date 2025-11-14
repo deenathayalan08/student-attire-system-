@@ -1,0 +1,350 @@
+import sqlite3
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from .config import AppConfig
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS students (
+	id TEXT PRIMARY KEY,
+	name TEXT,
+	class TEXT,
+	department TEXT,
+	rfid TEXT UNIQUE,
+	uniform_type TEXT,
+	email TEXT,
+	phone TEXT,
+	verified INTEGER DEFAULT 0,
+	contact_info TEXT
+);
+
+CREATE TABLE IF NOT EXISTS users (
+	username TEXT PRIMARY KEY,
+	password TEXT,
+	role TEXT,
+	full_name TEXT,
+	email TEXT,
+	assigned_class TEXT
+);
+
+CREATE TABLE IF NOT EXISTS events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	student_id TEXT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	zone TEXT,
+	status TEXT,
+	score REAL,
+	label TEXT,
+	details TEXT,
+	image_path TEXT,
+	FOREIGN KEY(student_id) REFERENCES students(id)
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+	key TEXT PRIMARY KEY,
+	value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS unauthorized_access (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	student_id TEXT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	zone TEXT,
+	attempt_type TEXT,
+	details TEXT,
+	alert_sent INTEGER DEFAULT 0,
+	FOREIGN KEY(student_id) REFERENCES students(id)
+);
+
+CREATE TABLE IF NOT EXISTS access_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	student_id TEXT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	zone TEXT,
+	entry_type TEXT,
+	is_late INTEGER DEFAULT 0,
+	is_early_exit INTEGER DEFAULT 0,
+	details TEXT,
+	FOREIGN KEY(student_id) REFERENCES students(id)
+);
+
+CREATE TABLE IF NOT EXISTS emergency_alerts (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	student_id TEXT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	alert_type TEXT,
+	severity TEXT,
+	details TEXT,
+	resolved INTEGER DEFAULT 0,
+	FOREIGN KEY(student_id) REFERENCES students(id)
+);
+
+CREATE TABLE IF NOT EXISTS geofence_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	student_id TEXT,
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	event_type TEXT,
+	location TEXT,
+	latitude REAL,
+	longitude REAL,
+	details TEXT,
+	FOREIGN KEY(student_id) REFERENCES students(id)
+);
+"""
+
+
+def get_conn(cfg: AppConfig | None = None) -> sqlite3.Connection:
+	cfg = cfg or AppConfig()
+	db_path = Path(cfg.data_dir) / "attire.db"
+	conn = sqlite3.connect(db_path)
+	return conn
+
+
+def init_db(cfg: AppConfig | None = None) -> None:
+	conn = get_conn(cfg)
+	with conn:
+		conn.executescript(SCHEMA)
+		# Lightweight migrations for identification fields
+		def _has_column(table: str, column: str) -> bool:
+			cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+			col_names = {c[1] for c in cols}
+			return column in col_names
+
+		def _ensure_column(table: str, column: str, decl: str) -> None:
+			if not _has_column(table, column):
+				try:
+					conn.execute(f"ALTER TABLE {table} ADD COLUMN {decl}")
+				except sqlite3.OperationalError:
+					# Some SQLite builds disallow constraints in ADD COLUMN or may raise even when safe; continue
+					pass
+		def _ensure_unique_index(table: str, column: str, index_name: str) -> None:
+			if not _has_column(table, column):
+				return
+			indexes = conn.execute(f"PRAGMA index_list({table})").fetchall()
+			index_names = {i[1] for i in indexes}
+			if index_name not in index_names:
+				try:
+					conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table}({column})")
+				except sqlite3.OperationalError:
+					# If creation fails due to duplicates, leave it and proceed
+					pass
+		# Students extra columns
+		# SQLite cannot add a column with UNIQUE via ALTER TABLE; add column then unique index
+		_ensure_column("students", "roll_no", "roll_no TEXT")
+		_ensure_unique_index("students", "roll_no", "idx_students_roll_no_unique")
+		_ensure_column("students", "id_card_hash", "id_card_hash TEXT")
+		_ensure_column("students", "face_hash", "face_hash TEXT")
+		
+		# Add new columns for students
+		_ensure_column("students", "department", "department TEXT")
+		_ensure_column("students", "uniform_type", "uniform_type TEXT")
+		_ensure_column("students", "email", "email TEXT")
+		_ensure_column("students", "phone", "phone TEXT")
+		_ensure_column("students", "verified", "verified INTEGER DEFAULT 0")
+		_ensure_column("students", "contact_info", "contact_info TEXT")
+	conn.close()
+
+
+def insert_event(row: Dict[str, Any], cfg: AppConfig | None = None) -> int:
+	conn = get_conn(cfg)
+	with conn:
+		cur = conn.execute(
+			"INSERT INTO events (student_id, zone, status, score, label, details, image_path) VALUES (?,?,?,?,?,?,?)",
+			(
+				row.get("student_id"),
+				row.get("zone"),
+				row.get("status"),
+				row.get("score"),
+				row.get("label"),
+				row.get("details"),
+				row.get("image_path"),
+			),
+		)
+		event_id = cur.lastrowid
+	return event_id
+
+
+def list_events(limit: int = 100, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def upsert_setting(key: str, value: str, cfg: AppConfig | None = None) -> None:
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+	conn.close()
+
+
+def get_setting(key: str, default: Optional[str] = None, cfg: AppConfig | None = None) -> Optional[str]:
+	conn = get_conn(cfg)
+	row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+	conn.close()
+	return row[0] if row else default
+
+
+def check_student_exists(student_id: str, cfg: AppConfig | None = None) -> bool:
+	"""Check if a student exists in the database"""
+	conn = get_conn(cfg)
+	row = conn.execute("SELECT id FROM students WHERE id=?", (student_id,)).fetchone()
+	conn.close()
+	return row is not None
+
+
+def log_unauthorized_access(student_id: str, zone: str, attempt_type: str, details: str, cfg: AppConfig | None = None) -> int:
+	"""Log unauthorized access attempt"""
+	conn = get_conn(cfg)
+	with conn:
+		cur = conn.execute(
+			"INSERT INTO unauthorized_access (student_id, zone, attempt_type, details) VALUES (?,?,?,?)",
+			(student_id, zone, attempt_type, details)
+		)
+		return cur.lastrowid
+
+
+def log_access(student_id: str, zone: str, entry_type: str, is_late: int = 0, is_early_exit: int = 0, details: str = "", cfg: AppConfig | None = None) -> int:
+	"""Log student access with time tracking"""
+	conn = get_conn(cfg)
+	with conn:
+		cur = conn.execute(
+			"INSERT INTO access_log (student_id, zone, entry_type, is_late, is_early_exit, details) VALUES (?,?,?,?,?,?)",
+			(student_id, zone, entry_type, is_late, is_early_exit, details)
+		)
+		return cur.lastrowid
+
+
+def log_emergency_alert(student_id: str, alert_type: str, severity: str, details: str, cfg: AppConfig | None = None) -> int:
+	"""Log emergency alert"""
+	conn = get_conn(cfg)
+	with conn:
+		cur = conn.execute(
+			"INSERT INTO emergency_alerts (student_id, alert_type, severity, details) VALUES (?,?,?,?)",
+			(student_id, alert_type, severity, details)
+		)
+		return cur.lastrowid
+
+
+def log_geofence_event(student_id: str, event_type: str, location: str, latitude: float, longitude: float, details: str, cfg: AppConfig | None = None) -> int:
+	"""Log geofence event"""
+	conn = get_conn(cfg)
+	with conn:
+		cur = conn.execute(
+			"INSERT INTO geofence_events (student_id, event_type, location, latitude, longitude, details) VALUES (?,?,?,?,?,?)",
+			(student_id, event_type, location, latitude, longitude, details)
+		)
+		return cur.lastrowid
+
+
+def get_student(student_id: str, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Get student by ID"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	row = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+	conn.close()
+	return dict(row) if row else None
+
+
+def get_all_students(cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all students"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("SELECT * FROM students ORDER BY id").fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def add_student(student_data: Dict[str, Any], cfg: AppConfig | None = None) -> None:
+	"""Add or update student"""
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute(
+			"INSERT OR REPLACE INTO students (id, name, class, department, uniform_type, email, phone, contact_info) VALUES (?,?,?,?,?,?,?,?)",
+			(
+				student_data.get("id"),
+				student_data.get("name"),
+				student_data.get("class"),
+				student_data.get("department"),
+				student_data.get("uniform_type"),
+				student_data.get("email"),
+				student_data.get("phone"),
+				student_data.get("contact_info")
+			)
+		)
+	conn.close()
+
+
+def update_student_verification(student_id: str, verified: int, cfg: AppConfig | None = None) -> None:
+	"""Update student verification status"""
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute("UPDATE students SET verified = ? WHERE id = ?", (verified, student_id))
+	conn.close()
+
+
+def get_compliance_stats(date: Optional[str] = None, cfg: AppConfig | None = None) -> Dict[str, Any]:
+	"""Get daily compliance statistics"""
+	conn = get_conn(cfg)
+	
+	date_filter = f"WHERE DATE(timestamp) = '{date}'" if date else ""
+	
+	# Total events
+	total = conn.execute(f"SELECT COUNT(*) FROM events {date_filter}").fetchone()[0]
+	
+	# Compliant events
+	compliant = conn.execute(f"SELECT COUNT(*) FROM events {date_filter} WHERE status = 'PASS'").fetchone()[0]
+	
+	# Non-compliant events
+	non_compliant = conn.execute(f"SELECT COUNT(*) FROM events {date_filter} WHERE status != 'PASS'").fetchone()[0]
+	
+	# Compliance percentage
+	compliance_pct = (compliant / total * 100) if total > 0 else 0
+	
+	# Verified students
+	verified_students = conn.execute("SELECT COUNT(*) FROM students WHERE verified = 1").fetchone()[0]
+	
+	# Total students
+	total_students = conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+	
+	conn.close()
+	
+	return {
+		"total_events": total,
+		"compliant_events": compliant,
+		"non_compliant_events": non_compliant,
+		"compliance_percentage": compliance_pct,
+		"verified_students": verified_students,
+		"total_students": total_students
+	}
+
+
+def get_user(username: str, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Get user by username"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+	conn.close()
+	return dict(row) if row else None
+
+
+def add_user(username: str, password: str, role: str, full_name: str, email: str, assigned_class: str = "", cfg: AppConfig | None = None) -> None:
+	"""Add user"""
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute(
+			"INSERT INTO users (username, password, role, full_name, email, assigned_class) VALUES (?,?,?,?,?,?)",
+			(username, password, role, full_name, email, assigned_class)
+		)
+	conn.close()
+
+
+def get_events_for_student(student_id: str, limit: int = 10, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get events for a specific student"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("SELECT * FROM events WHERE student_id = ? ORDER BY timestamp DESC LIMIT ?", (student_id, limit)).fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
