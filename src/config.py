@@ -63,6 +63,11 @@ class AppConfig:
 	# Casual/Uniform Day Policy
 	uniform_days: List[str] = None  # ["wednesday"] - filled in __post_init__
 	casual_days: List[str] = None  # ["friday"] - filled in __post_init__
+	
+	# Admin-editable policy settings
+	policy_uniform_day: str = "wednesday"  # Day(s) when uniform is mandatory
+	policy_casual_day: str = "friday"      # Day(s) when casual is allowed
+	policy_other_days: str = "uniform"     # uniform or casual for other days
 
 	# Gender-specific policy settings
 	# Male attire requirements
@@ -98,6 +103,13 @@ class AppConfig:
 	# Report settings
 	report_template_path: Path = Path("templates/report_template.html")
 	reports_dir: Path = Path("reports")
+	
+	# Uniform images storage
+	uniform_images_dir: Path = Path("data/uniforms")
+	male_uniform_image: Path = Path("data/uniforms/male_uniform.jpg")
+	female_uniform_image: Path = Path("data/uniforms/female_uniform.jpg")
+	male_casual_image: Path = Path("data/uniforms/male_casual.jpg")
+	female_casual_image: Path = Path("data/uniforms/female_casual.jpg")
 
 	# Paths
 	data_dir: Path = Path("data")
@@ -110,6 +122,10 @@ class AppConfig:
 		if self.zones is None:
 			self.zones = ["Gate", "Classroom", "Lab", "Sports"]
 		if self.uniform_days is None:
-			self.uniform_days = ["wednesday"]
+			self.uniform_days = [self.policy_uniform_day.lower()]
 		if self.casual_days is None:
-			self.casual_days = ["friday"]
+			self.casual_days = [self.policy_casual_day.lower()]
+		
+		# Ensure directories exist
+		self.uniform_images_dir.mkdir(parents=True, exist_ok=True)
+		self.reports_dir.mkdir(parents=True, exist_ok=True)

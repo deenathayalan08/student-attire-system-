@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS students (
 	name TEXT,
 	class TEXT,
 	department TEXT,
+	gender TEXT,
 	rfid TEXT UNIQUE,
 	uniform_type TEXT,
 	email TEXT,
@@ -91,6 +92,15 @@ CREATE TABLE IF NOT EXISTS geofence_events (
 	details TEXT,
 	FOREIGN KEY(student_id) REFERENCES students(id)
 );
+
+CREATE TABLE IF NOT EXISTS departments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	department_id TEXT UNIQUE NOT NULL,
+	name TEXT UNIQUE NOT NULL,
+	short_form TEXT UNIQUE NOT NULL,
+	num_classes INTEGER NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -138,11 +148,15 @@ def init_db(cfg: AppConfig | None = None) -> None:
 		
 		# Add new columns for students
 		_ensure_column("students", "department", "department TEXT")
+		_ensure_column("students", "gender", "gender TEXT")
 		_ensure_column("students", "uniform_type", "uniform_type TEXT")
 		_ensure_column("students", "email", "email TEXT")
 		_ensure_column("students", "phone", "phone TEXT")
 		_ensure_column("students", "verified", "verified INTEGER DEFAULT 0")
 		_ensure_column("students", "contact_info", "contact_info TEXT")
+
+		# Ensure departments table has department_id column
+		_ensure_column("departments", "department_id", "department_id TEXT UNIQUE")
 	conn.close()
 
 
@@ -262,16 +276,17 @@ def add_student(student_data: Dict[str, Any], cfg: AppConfig | None = None) -> N
 	conn = get_conn(cfg)
 	with conn:
 		conn.execute(
-			"INSERT OR REPLACE INTO students (id, name, class, department, uniform_type, email, phone, contact_info) VALUES (?,?,?,?,?,?,?,?)",
+			"INSERT OR REPLACE INTO students (id, name, class, department, gender, uniform_type, email, phone, contact_info) VALUES (?,?,?,?,?,?,?,?,?)",
 			(
 				student_data.get("id"),
 				student_data.get("name"),
 				student_data.get("class"),
 				student_data.get("department"),
+				student_data.get("gender"),
 				student_data.get("uniform_type"),
 				student_data.get("email"),
 				student_data.get("phone"),
-				student_data.get("contact_info")
+				student_data.get("contact_info"),
 			)
 		)
 	conn.close()
@@ -348,3 +363,185 @@ def get_events_for_student(student_id: str, limit: int = 10, cfg: AppConfig | No
 	rows = conn.execute("SELECT * FROM events WHERE student_id = ? ORDER BY timestamp DESC LIMIT ?", (student_id, limit)).fetchall()
 	conn.close()
 	return [dict(r) for r in rows]
+
+
+def get_policy_settings(cfg: AppConfig | None = None) -> Dict[str, Any]:
+	"""Get all policy settings from DB"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("SELECT key, value FROM settings WHERE key LIKE 'policy_%'").fetchall()
+	conn.close()
+	
+	settings = {}
+	for row in rows:
+		key = row['key']
+		value = row['value']
+		# Parse boolean values
+		if value.lower() in ('true', 'false'):
+			settings[key] = value.lower() == 'true'
+		# Try to parse as integer
+		elif value.isdigit():
+			settings[key] = int(value)
+		else:
+			settings[key] = value
+	
+	return settings
+
+
+def update_policy_settings(policy_dict: Dict[str, Any], cfg: AppConfig | None = None) -> None:
+	"""Update policy settings in DB"""
+	conn = get_conn(cfg)
+	with conn:
+		for key, value in policy_dict.items():
+			if key.startswith('policy_'):
+				conn.execute(
+					"INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+					(key, str(value))
+				)
+	conn.close()
+
+
+def add_department(name: str, short_form: str, num_classes: int, cfg: AppConfig | None = None) -> int:
+	"""Add a new department"""
+	conn = get_conn(cfg)
+
+	# Generate department ID (2-digit zero-padded sequential number)
+	with conn:
+		# Get the next department ID
+		result = conn.execute("SELECT COUNT(*) FROM departments").fetchone()
+		next_id = result[0] + 1
+		department_id = f"{next_id:02d}"  # Zero-padded to 2 digits
+
+		cur = conn.execute(
+			"INSERT INTO departments (department_id, name, short_form, num_classes) VALUES (?,?,?,?)",
+			(department_id, name, short_form, num_classes)
+		)
+		return cur.lastrowid
+
+
+def get_all_departments(cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all departments with student counts"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+
+	# Get departments with student counts
+	rows = conn.execute("""
+		SELECT d.*,
+			   COUNT(s.id) as students
+		FROM departments d
+		LEFT JOIN students s ON s.department = d.name
+		GROUP BY d.id, d.name, d.short_form, d.num_classes, d.class_prefix, d.created_at
+		ORDER BY d.name
+	""").fetchall()
+
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def get_department_by_id(dept_id: int, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Get department by ID"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	row = conn.execute("SELECT * FROM departments WHERE id=?", (dept_id,)).fetchone()
+	conn.close()
+	return dict(row) if row else None
+
+
+def update_department(dept_id: int, name: str, short_form: str, num_classes: int, cfg: AppConfig | None = None) -> None:
+	"""Update department"""
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute(
+			"UPDATE departments SET name=?, short_form=?, num_classes=? WHERE id=?",
+			(name, short_form, num_classes, dept_id)
+		)
+	conn.close()
+
+
+def generate_student_id(batch_year: str, department_id: str, class_section: str, student_number: str, cfg: AppConfig | None = None) -> str:
+	"""Generate student ID in format: YYDDCSNN
+	- YY: Last 2 digits of batch year (e.g., 23 for 2023)
+	- DD: Department ID (2-digit, e.g., 01)
+	- C: Class section (1-digit, e.g., 1 for A, 2 for B)
+	- NN: Student number (2-digit, e.g., 08)
+	"""
+	# Convert batch year to last 2 digits
+	batch_short = batch_year[-2:] if len(batch_year) >= 2 else batch_year.zfill(2)
+
+	# Ensure department_id is 2 digits
+	dept_id = department_id.zfill(2)
+
+	# Convert class section to number (A=1, B=2, C=3, etc.)
+	if class_section.isalpha():
+		class_num = str(ord(class_section.upper()) - ord('A') + 1)
+	else:
+		class_num = class_section
+
+	# Ensure student number is 2 digits
+	student_num = student_number.zfill(2)
+
+	return f"{batch_short}{dept_id}{class_num}{student_num}"
+
+
+def parse_student_id(student_id: str, cfg: AppConfig | None = None) -> Dict[str, str]:
+	"""Parse student ID and return components"""
+	if len(student_id) != 7:
+		return {}
+
+	try:
+		batch_year = f"20{student_id[:2]}"  # Assume 20xx format
+		department_id = student_id[2:4]
+		class_section_num = int(student_id[4:5])
+		student_number = student_id[5:7]
+
+		# Convert class number back to letter (1=A, 2=B, 3=C, etc.)
+		class_section = chr(ord('A') + class_section_num - 1)
+
+		return {
+			'batch_year': batch_year,
+			'department_id': department_id,
+			'class_section': class_section,
+			'student_number': student_number,
+			'full_id': student_id
+		}
+	except:
+		return {}
+
+
+def delete_department(dept_id: int, cfg: AppConfig | None = None) -> None:
+	"""Delete department"""
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute("DELETE FROM departments WHERE id=?", (dept_id,))
+	conn.close()
+
+
+def clear_all_student_data(cfg: AppConfig | None = None) -> None:
+	"""Clear all student-related data from the database"""
+	conn = get_conn(cfg)
+	with conn:
+		# Clear all tables in order of dependencies (foreign keys)
+		conn.execute("DELETE FROM geofence_events")
+		conn.execute("DELETE FROM emergency_alerts")
+		conn.execute("DELETE FROM access_log")
+		conn.execute("DELETE FROM unauthorized_access")
+		conn.execute("DELETE FROM events")
+		conn.execute("DELETE FROM students")
+		conn.execute("DELETE FROM users")
+		conn.execute("DELETE FROM departments")
+		conn.execute("DELETE FROM settings WHERE key LIKE 'policy_%'")
+	conn.close()
+
+
+def delete_student(student_id: str, cfg: AppConfig | None = None) -> None:
+	"""Delete a single student and all related records (events, logs, alerts)."""
+	conn = get_conn(cfg)
+	with conn:
+		# Remove related rows first to avoid orphan records
+		conn.execute("DELETE FROM geofence_events WHERE student_id = ?", (student_id,))
+		conn.execute("DELETE FROM emergency_alerts WHERE student_id = ?", (student_id,))
+		conn.execute("DELETE FROM access_log WHERE student_id = ?", (student_id,))
+		conn.execute("DELETE FROM unauthorized_access WHERE student_id = ?", (student_id,))
+		conn.execute("DELETE FROM events WHERE student_id = ?", (student_id,))
+		conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+	conn.close()

@@ -190,28 +190,37 @@ class BiometricSystem:
 
         return success, confidence
 
-    def verify_identity(self, image: Any, student_id: str) -> Dict[str, Any]:
+    def verify_identity_on_phone(self, student_id: str) -> Dict[str, Any]:
         """
-        Verify student identity using fingerprint biometric from mobile phone
+        Verify student identity using mobile phone fingerprint sensor
+        This simulates the phone-side biometric verification process
 
         Args:
-            image: Student image (PIL Image or similar) - not used for fingerprint
             student_id: Student ID to verify against
 
         Returns:
-            Dictionary with verification results
+            Dictionary with phone-side verification results
         """
         # Simulate mobile phone fingerprint verification
         # In a real system, this would interface with mobile device fingerprint sensor
         success, confidence = self.simulate_mobile_biometric_prompt(student_id, "fingerprint")
 
         return {
-            "match": success,
+            "verified": success,
             "confidence": confidence,
             "biometric_type": "fingerprint",
-            "student_id": student_id,
-            "verification_method": "simulated_mobile_fingerprint"
+            "student_id": student_id if success else None,
+            "verification_method": "mobile_fingerprint",
+            "device_type": "mobile_phone",
+            "timestamp": datetime.now().isoformat()
         }
+
+    def verify_identity(self, image: Any, student_id: str) -> Dict[str, Any]:
+        """
+        Legacy method for backward compatibility
+        Now delegates to phone-side verification
+        """
+        return self.verify_identity_on_phone(student_id)
 
 
 def get_biometric_system(cfg: AppConfig) -> BiometricSystem:
