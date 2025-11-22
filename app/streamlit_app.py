@@ -1,3 +1,5 @@
+
+
 import io
 import os
 import time
@@ -40,7 +42,7 @@ from src.db import (
 )
 from src.alerts import notify_non_compliance, get_id_card_status_message, get_detailed_id_card_message, notify_id_card_status
 from src.security import check_and_alert_unauthorized_student, check_and_log_entry_time, check_and_log_exit_time, check_and_alert_emergency_violations
-from src.biometric import get_biometric_system
+from src.face_recognition import get_face_system
 
 
 def init_session_state() -> None:
@@ -54,6 +56,10 @@ def init_session_state() -> None:
 		st.session_state.last_train_info = None
 	if "zone" not in st.session_state:
 		st.session_state.zone = "Gate"
+	if "face_verified_student" not in st.session_state:
+		st.session_state.face_verified_student = None
+	if "sidebar_settings_expanded" not in st.session_state:
+		st.session_state.sidebar_settings_expanded = False
 
 
 def ensure_config_defaults(cfg: AppConfig) -> AppConfig:
@@ -68,60 +74,191 @@ def ensure_config_defaults(cfg: AppConfig) -> AppConfig:
 
 
 def sidebar_settings() -> None:
-	with st.sidebar.expander("Settings", expanded=False):
-		st.sidebar.header("Settings")
+	# Settings toggle button with arrow
+	arrow = "▼" if st.session_state.sidebar_settings_expanded else "▶"
+	if st.sidebar.button(f"{arrow} **Settings**", key="settings_toggle", use_container_width=True):
+		st.session_state.sidebar_settings_expanded = not st.session_state.sidebar_settings_expanded
+		st.rerun()
+
+	if st.session_state.sidebar_settings_expanded:
 		cfg: AppConfig = ensure_config_defaults(st.session_state.config)
 
-		cfg.policy_profile = st.sidebar.selectbox("Policy profile", ["regular", "sports", "lab"], index=["regular", "sports", "lab"].index(cfg.policy_profile))
-		st.sidebar.caption("Profiles adjust expected attire and safety items.")
-
-		cfg.expected_top = st.sidebar.text_input("Expected top color keyword", value=cfg.expected_top)
-		cfg.expected_bottom = st.sidebar.text_input("Expected bottom color keyword", value=cfg.expected_bottom)
-		cfg.hist_bins = st.sidebar.slider("Histogram bins", 8, 64, cfg.hist_bins, 4)
-		cfg.confidence_threshold = st.sidebar.slider("Decision threshold", 0.5, 0.95, float(cfg.confidence_threshold), 0.01)
-		cfg.max_video_fps = st.sidebar.slider("Max video FPS", 5, 30, cfg.max_video_fps, 1)
-		cfg.enable_rules = st.sidebar.checkbox("Enable rule-based checks", value=cfg.enable_rules)
-		cfg.enable_model = st.sidebar.checkbox("Enable ML model", value=cfg.enable_model)
-		cfg.save_frames = st.sidebar.checkbox("Save collected frames to dataset", value=False)
-		cfg.current_label = st.sidebar.text_input("Label for saved samples", value=cfg.current_label)
-		
-		# ID Card detection settings
+		# General Settings Section
 		st.sidebar.markdown("---")
-		st.sidebar.subheader("ID Card Detection")
-		cfg.enable_id_card_detection = st.sidebar.checkbox("Enable ID card detection", value=cfg.enable_id_card_detection)
-		cfg.id_card_required = st.sidebar.checkbox("ID card required", value=cfg.id_card_required)
-		cfg.id_card_confidence_threshold = st.sidebar.slider("ID card confidence threshold", 0.1, 0.9, float(cfg.id_card_confidence_threshold), 0.05)
+		st.sidebar.markdown("### ⚙️ **General Settings**")
 
-		# Uniform policy settings
+		col1, col2 = st.sidebar.columns(2)
+		with col1:
+			cfg.policy_profile = st.selectbox(
+				"Policy Profile",
+				["regular", "sports", "lab"],
+				index=["regular", "sports", "lab"].index(cfg.policy_profile),
+				help="Adjusts expected attire and safety items based on activity type"
+			)
+		with col2:
+			cfg.hist_bins = st.slider(
+				"Histogram Bins",
+				8, 64, cfg.hist_bins, 4,
+				help="Number of bins for color histogram analysis"
+			)
+
+		col3, col4 = st.sidebar.columns(2)
+		with col3:
+			cfg.expected_top = st.text_input(
+				"Expected Top Color",
+				value=cfg.expected_top,
+				help="Color keyword for top attire (e.g., white, blue)"
+			)
+		with col4:
+			cfg.expected_bottom = st.text_input(
+				"Expected Bottom Color",
+				value=cfg.expected_bottom,
+				help="Color keyword for bottom attire (e.g., black, navy)"
+			)
+
+		# Model Settings Section
 		st.sidebar.markdown("---")
-		st.sidebar.subheader("Uniform Policy")
-		cfg.policy_gender = st.sidebar.selectbox("Gender", ["male", "female"], index=0 if cfg.policy_gender == "male" else 1)
-		cfg.require_shirt_for_male = st.sidebar.checkbox("Require shirt for males", value=getattr(cfg, "require_shirt_for_male", True))
-		cfg.require_black_shoes_male = st.sidebar.checkbox("Require black shoes for males", value=getattr(cfg, "require_black_shoes_male", True))
-		cfg.allow_any_color_pants_male = st.sidebar.checkbox("Allow any color pants for males", value=getattr(cfg, "allow_any_color_pants_male", True))
-		cfg.require_footwear_male = st.sidebar.checkbox("Require footwear for males", value=cfg.require_footwear_male)
+		st.sidebar.markdown("### 🤖 **Model Settings**")
 
+		col5, col6 = st.sidebar.columns(2)
+		with col5:
+			cfg.confidence_threshold = st.slider(
+				"Decision Threshold",
+				0.5, 0.95, float(cfg.confidence_threshold), 0.01,
+				help="Minimum confidence score for classification"
+			)
+		with col6:
+			cfg.max_video_fps = st.slider(
+				"Max Video FPS",
+				5, 30, cfg.max_video_fps, 1,
+				help="Maximum frames per second for video processing"
+			)
+
+		st.sidebar.markdown("**Model Controls**")
+		col7, col8 = st.sidebar.columns(2)
+		with col7:
+			cfg.enable_rules = st.checkbox(
+				"Enable Rule-based Checks",
+				value=cfg.enable_rules,
+				help="Use predefined rules for attire verification"
+			)
+		with col8:
+			cfg.enable_model = st.checkbox(
+				"Enable ML Model",
+				value=cfg.enable_model,
+				help="Use machine learning model for classification"
+			)
+
+		cfg.save_frames = st.sidebar.checkbox(
+			"Save Frames to Dataset",
+			value=False,
+			help="Automatically save processed frames for training"
+		)
+		cfg.current_label = st.sidebar.text_input(
+			"Dataset Label",
+			value=cfg.current_label,
+			help="Label for saved training samples"
+		)
+
+		# ID Card Detection Section
 		st.sidebar.markdown("---")
-		if st.sidebar.button("Load saved model"):
-			try:
-				st.session_state.classifier.load(cfg.model_path)
-				st.success("Model loaded")
-			except Exception as e:
-				st.error(f"Failed to load model: {e}")
+		st.sidebar.markdown("### 🆔 **ID Card Detection**")
 
-		if st.sidebar.button("Clear session state"):
-			for k in list(st.session_state.keys()):
-				if k not in ["config"]:
-					del st.session_state[k]
+		col9, col10 = st.sidebar.columns(2)
+		with col9:
+			cfg.enable_id_card_detection = st.checkbox(
+				"Enable Detection",
+				value=cfg.enable_id_card_detection,
+				help="Activate automatic ID card detection"
+			)
+		with col10:
+			cfg.id_card_required = st.checkbox(
+				"ID Card Required",
+				value=cfg.id_card_required,
+				help="Require visible student ID card"
+			)
+
+		cfg.id_card_confidence_threshold = st.sidebar.slider(
+			"Confidence Threshold",
+			0.1, 0.9, float(cfg.id_card_confidence_threshold), 0.05,
+			help="Minimum confidence for ID card detection"
+		)
+
+		# Uniform Policy Section
+		st.sidebar.markdown("---")
+		st.sidebar.markdown("### 👔 **Uniform Policy**")
+
+		cfg.policy_gender = st.sidebar.selectbox(
+			"Policy Gender Focus",
+			["male", "female"],
+			index=0 if cfg.policy_gender == "male" else 1,
+			help="Gender-specific uniform requirements to configure"
+		)
+
+		st.sidebar.markdown("**Male Uniform Requirements**")
+		col11, col12 = st.sidebar.columns(2)
+		with col11:
+			cfg.require_shirt_for_male = st.checkbox(
+				"Require Formal Shirt",
+				value=getattr(cfg, "require_shirt_for_male", True),
+				help="Require formal shirt for male students"
+			)
+			cfg.require_black_shoes_male = st.checkbox(
+				"Require Black Shoes",
+				value=getattr(cfg, "require_black_shoes_male", True),
+				help="Require black formal shoes for males"
+			)
+		with col12:
+			cfg.allow_any_color_pants_male = st.checkbox(
+				"Allow Any Color Pants",
+				value=getattr(cfg, "allow_any_color_pants_male", True),
+				help="Allow pants in any color for males"
+			)
+			cfg.require_footwear_male = st.checkbox(
+				"Require Footwear",
+				value=cfg.require_footwear_male,
+				help="Require any type of footwear for males"
+			)
+
+		# Action Buttons Section
+		st.sidebar.markdown("---")
+		st.sidebar.markdown("### 🔧 **Actions**")
+
+		col13, col14 = st.sidebar.columns(2)
+		with col13:
+			if st.sidebar.button("📥 Load Model", use_container_width=True):
+				try:
+					st.session_state.classifier.load(cfg.model_path)
+					st.sidebar.success("✅ Model loaded successfully")
+				except Exception as e:
+					st.sidebar.error(f"❌ Failed to load model: {e}")
+
+		with col14:
+			if st.sidebar.button("🗑️ Clear Session", use_container_width=True):
+				for k in list(st.session_state.keys()):
+					if k not in ["config", "sidebar_settings_expanded"]:
+						del st.session_state[k]
+				st.sidebar.success("✅ Session cleared")
 				st.rerun()
 
 
 def render_home():
-	st.title("🏫 Student Attire & Safety Verification System")
-	st.caption("Streamlit + MediaPipe + scikit-learn")
-
-	st.markdown("---")
-	st.markdown("### 👋 Welcome to the Student Verification Portal")
+	# Professional header
+	render_professional_header()
+	
+	# Welcome section with professional styling
+	st.markdown("""
+	<div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+	            padding: 2rem; 
+	            border-radius: 10px; 
+	            margin: 2rem 0;
+	            border-left: 5px solid #1f77b4;">
+		<h2 style="color: #1f77b4; margin-top: 0;">👋 Welcome to the Student Verification Portal</h2>
+		<p style="font-size: 1.1rem; color: #495057; margin-bottom: 0;">
+			Secure, efficient, and AI-powered student identity and attire verification system.
+		</p>
+	</div>
+	""", unsafe_allow_html=True)
 
 	st.markdown("#### Are you already registered?")
 	if "home_auth_mode" not in st.session_state:
@@ -143,20 +280,79 @@ def render_home():
 		render_home_registration_section()
 
 	st.markdown("---")
-	st.markdown("### 🔧 System Information")
-	st.info("This system uses advanced AI to verify student attire compliance and ensure safety standards are met.")
+	
+	# System Information with professional styling
+	st.markdown("""
+	<div style="background-color: #e7f3ff; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1f77b4; margin: 2rem 0;">
+		<h3 style="color: #1f77b4; margin-top: 0;">🔧 System Information</h3>
+		<p style="color: #495057; margin-bottom: 0;">
+			This system uses advanced AI and computer vision technologies to verify student attire compliance 
+			and ensure safety standards are met. Powered by MediaPipe, scikit-learn, and Streamlit.
+		</p>
+	</div>
+	""", unsafe_allow_html=True)
 
-	st.markdown("### 📊 Quick Stats")
+	# Quick Stats with professional styling
+	st.markdown("### 📊 System Statistics")
 	stats = get_compliance_stats(cfg=st.session_state.config)
+	
+	# Professional metric cards
 	col1, col2, col3, col4 = st.columns(4)
 	with col1:
-		st.metric("Total Students", stats["total_students"])
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+		            padding: 1.5rem; 
+		            border-radius: 10px; 
+		            text-align: center;
+		            color: white;
+		            box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+			<div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">{}</div>
+			<div style="font-size: 0.9rem; opacity: 0.9;">Total Students</div>
+		</div>
+		""".format(stats["total_students"]), unsafe_allow_html=True)
+	
 	with col2:
-		st.metric("Verified Today", stats["verified_students"])
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+		            padding: 1.5rem; 
+		            border-radius: 10px; 
+		            text-align: center;
+		            color: white;
+		            box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+			<div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">{}</div>
+			<div style="font-size: 0.9rem; opacity: 0.9;">Verified Today</div>
+		</div>
+		""".format(stats["verified_students"]), unsafe_allow_html=True)
+	
 	with col3:
-		st.metric("Compliance Rate", f"{stats['compliance_percentage']:.1f}%")
+		compliance_color = "#2ca02c" if stats['compliance_percentage'] >= 80 else "#ff7f0e" if stats['compliance_percentage'] >= 60 else "#d62728"
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
+		            padding: 1.5rem; 
+		            border-radius: 10px; 
+		            text-align: center;
+		            color: white;
+		            box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+			<div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem; color: {};">{:.1f}%</div>
+			<div style="font-size: 0.9rem; opacity: 0.9;">Compliance Rate</div>
+		</div>
+		""".format(compliance_color, stats['compliance_percentage']), unsafe_allow_html=True)
+	
 	with col4:
-		st.metric("Events Today", stats["total_events"])
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); 
+		            padding: 1.5rem; 
+		            border-radius: 10px; 
+		            text-align: center;
+		            color: white;
+		            box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+			<div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">{}</div>
+			<div style="font-size: 0.9rem; opacity: 0.9;">Events Today</div>
+		</div>
+		""".format(stats["total_events"]), unsafe_allow_html=True)
+	
+	# Add footer
+	render_professional_footer()
 
 
 def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
@@ -189,7 +385,7 @@ def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
 
 
 def render_home_login_section() -> None:
-	st.subheader("🔐 Student Login & Biometric Verification")
+	st.subheader("🔐 Student Login & Face Verification")
 	cfg: AppConfig = st.session_state.config
 
 	default_id = st.session_state.get("prefill_student_id", "")
@@ -213,56 +409,55 @@ def render_home_login_section() -> None:
 	with col_c:
 		st.write(f"**Gender:** {student_info.get('gender', 'N/A').title()}")
 
-	bio_system = get_biometric_system(cfg)
-	if not bio_system.is_biometric_registered(student_id_input):
-		st.warning("Biometric authentication not registered for this student. Please contact an administrator.")
+	face_system = get_face_system(cfg)
+	if not face_system.has_face_data(student_id_input):
+		st.warning("Face data not registered for this student. Please complete face registration first.")
 		return
 
-	from src.phone_comm import get_phone_comm_system
-	phone_comm = get_phone_comm_system(cfg)
+	st.markdown("#### 🧑‍💻 Face Verification")
+	st.info(
+		"Click the button below to enable camera for face verification. "
+		"Upload a **recent selfie** taken right now (or use the camera input). "
+		"This will be matched against the stored face data for the selected student."
+	)
+	
+	# Initialize camera enabled state for this student
+	camera_key = f"camera_enabled_login_{student_id_input}"
+	if camera_key not in st.session_state:
+		st.session_state[camera_key] = False
+	
+	# Button to enable camera
+	if not st.session_state[camera_key]:
+		if st.button("📷 Enable Camera for Face Verification", key="enable_camera_login_btn", type="primary"):
+			st.session_state[camera_key] = True
+			st.rerun()
+	
+	face_upload = st.file_uploader(
+		"Upload a selfie (JPG/PNG)", type=["jpg", "jpeg", "png"], key="home_face_login_upload"
+	)
+	
+	# Only show camera if enabled
+	camera_capture = None
+	if st.session_state[camera_key]:
+		camera_capture = st.camera_input("Or capture using your webcam", key="home_face_login_camera")
 
-	qr_state = st.session_state.get("home_qr_state")
+	selected_image = face_upload or camera_capture
 
-	if st.button("Generate Unique Biometric QR Code", key="home_generate_biometric_qr"):
-		try:
-			token, qr_img = phone_comm.generate_biometric_qr(student_id_input)
-			buf = io.BytesIO()
-			qr_img.save(buf, format="PNG")
-			st.session_state.home_qr_state = {
-				"student_id": student_id_input,
-				"image": buf.getvalue(),
-				"generated_token": token,
-				"generated_at": datetime.now().isoformat(),
-			}
-			st.session_state.home_biometric_verified = None
-			st.success("QR code generated. Scan it with your phone to continue.")
-		except Exception as exc:
-			st.error(f"Unable to generate QR code: {exc}")
-
-	qr_state = st.session_state.get("home_qr_state")
-	if qr_state and qr_state.get("student_id") == student_id_input:
-		st.markdown("##### 📱 Scan & Authenticate")
-		st.image(qr_state["image"], caption="Scan this QR code on your phone", use_column_width=False)
-		st.info(
-			"Each student receives a unique QR code. Scan it on your phone, complete the fingerprint prompt, "
-			"and enter the verification token displayed on your phone below."
-		)
-
-		token_input = st.text_input("Verification token from phone", key="home_token_input")
-		if st.button("Verify Biometric Token", key="home_verify_token_btn") and token_input:
-			verified_student = phone_comm.verify_token_and_get_student_id(token_input.strip())
-			if verified_student is None:
-				st.error("Invalid or expired token. Generate a new QR code and try again.")
-			elif verified_student != student_id_input:
-				st.error("Token does not match this student. Please regenerate the QR code.")
-			else:
-				st.session_state.home_biometric_verified = student_id_input
-				st.success("Biometric verification successful! You can proceed to attire verification.")
-				st.session_state.login_student_id = student_id_input
-				st.session_state.nav_selection = "Student Verification"
-				st.rerun()
-	else:
-		st.info("Click **Generate Unique Biometric QR Code** to begin the verification process.")
+	if selected_image and st.button("✅ Verify Face Identity", key="home_face_verify_btn", type="primary", use_container_width=True):
+		with st.spinner("🔄 Verifying face identity... Please wait."):
+			img = Image.open(selected_image).convert("RGB")
+			result = face_system.verify_face(student_id_input, cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR))
+		if result.success:
+			st.success("✅ Face verified successfully! You can proceed to attire verification.")
+			st.session_state.face_verified_student = student_id_input
+			st.session_state.login_student_id = student_id_input
+			st.session_state.nav_selection = "Student Verification"
+			st.rerun()
+		else:
+			st.error(
+				f"❌ Face verification failed. {result.message} "
+				f"(difference score: {result.distance:.3f})"
+			)
 
 
 def render_home_registration_section() -> None:
@@ -314,44 +509,199 @@ def render_home_registration_section() -> None:
 		else:
 			student_id = st.text_input("Student ID *", key="home_reg_student_id_manual")
 
-		st.markdown("---")
-		st.markdown("**Biometric Registration**")
-		biometric_type = st.selectbox("Biometric Type", ["fingerprint", "face"], index=0, key="home_reg_biometric")
-
 		if st.form_submit_button("Complete Registration", type="primary"):
 			if not (student_id and name and gender):
 				st.error("Name, gender, and student ID are required.")
 			else:
-				parsed = parse_student_id(student_id, cfg=cfg)
+				# Store form data in session state for processing after face capture
+				st.session_state.reg_form_data = {
+					"student_id": student_id,
+					"name": name,
+					"gender": gender,
+					"email": email,
+					"phone": phone,
+					"selected_dept": selected_dept,
+					"dept_id": dept_id,
+				}
+				st.rerun()
+
+	# ============================================================================
+	# Face registration section (OUTSIDE FORM - form context ends above)
+	# ============================================================================
+	st.markdown("---")
+	st.markdown("#### 🙂 Face Registration (Required)")
+	
+	# Check if form was submitted and data is stored
+	form_data = st.session_state.get("reg_form_data", {})
+	name_val = form_data.get("name", "")
+	gender_val = form_data.get("gender", "")
+	student_id_val = form_data.get("student_id", "")
+	
+	# Also check if values exist in session state (for immediate display)
+	if not name_val:
+		name_val = st.session_state.get("home_reg_name", "")
+	if not gender_val:
+		gender_val = st.session_state.get("home_reg_gender", "")
+	if not student_id_val:
+		student_id_val = st.session_state.get("home_reg_student_id") or st.session_state.get("home_reg_student_id_manual", "")
+	
+	# Check if first stage is complete (student ID, name, gender filled)
+	first_stage_complete = bool(student_id_val and name_val and gender_val)
+	
+	if not first_stage_complete:
+		st.info("⚠️ Please complete the student information above (Name, Gender, and Student ID) and click 'Complete Registration' before proceeding to face registration.")
+	else:
+		# Initialize camera enabled state for registration
+		camera_key_reg = "camera_enabled_registration"
+		if camera_key_reg not in st.session_state:
+			st.session_state[camera_key_reg] = False
+		
+		st.info("Click the button below to enable camera for face registration. Upload a clear face photo or capture one using your webcam. This will be used for future logins.")
+		
+		# Button to enable camera (outside form - this is safe now)
+		if not st.session_state[camera_key_reg]:
+			if st.button("📷 Enable Camera for Face Registration", key="enable_camera_reg_btn", type="primary"):
+				st.session_state[camera_key_reg] = True
+				st.rerun()
+		
+		face_upload = st.file_uploader("Upload face photo (JPG/PNG)", type=["jpg", "jpeg", "png"], key="home_face_upload")
+		
+		# Only show camera if enabled
+		face_capture = None
+		if st.session_state[camera_key_reg]:
+			face_capture = st.camera_input("Or capture using your webcam", key="home_face_capture")
+
+		face_image = None
+		if face_capture is not None:
+			face_image = Image.open(io.BytesIO(face_capture.getvalue())).convert("RGB")
+		elif face_upload is not None:
+			face_image = Image.open(face_upload).convert("RGB")
+
+		if face_image is not None:
+			st.success("✅ Face image ready for registration.")
+			st.image(face_image, caption="Face Preview", width=250)
+			
+			# Process registration if form data is available
+			if st.session_state.get("reg_form_data"):
+				form_data = st.session_state.reg_form_data
+				parsed = parse_student_id(form_data["student_id"], cfg=cfg)
 				class_name = f"{parsed.get('batch_year', '')} - {parsed.get('class_section', '')}" if parsed else ""
 				department_name = next((d['name'] for d in departments if d['department_id'] == parsed.get('department_id')), "") if parsed else ""
 
 				add_student({
-					"id": student_id,
-					"name": name,
-					"class": class_name or student_id,
-					"department": department_name or selected_dept,
-					"gender": gender,
-					"email": email,
-					"phone": phone,
+					"id": form_data["student_id"],
+					"name": form_data["name"],
+					"class": class_name or form_data["student_id"],
+					"department": department_name or form_data["selected_dept"],
+					"gender": form_data["gender"],
+					"email": form_data["email"],
+					"phone": form_data["phone"],
 					"contact_info": "",
 				}, cfg=cfg)
 
-				bio_system = get_biometric_system(cfg)
-				bio_success = bio_system.register_biometric(student_id, biometric_type)
-
-				st.success(f"Registration completed successfully for {name}!")
-				if bio_success:
-					st.info("Biometric data registered. You can now log in.")
+				face_system = get_face_system(cfg)
+				face_array = cv2.cvtColor(np.array(face_image), cv2.COLOR_RGB2BGR)
+				
+				# Show processing message
+				with st.spinner("🔄 Processing face image and storing data..."):
+					face_result = face_system.register_face(form_data["student_id"], face_array)
+				
+				if not face_result.success:
+					st.error(f"❌ Failed to store face data: {face_result.message}")
+					st.warning("⚠️ **Possible reasons:**")
+					st.warning("• No face detected in the image")
+					st.warning("• Face is not clearly visible")
+					st.warning("• Poor lighting conditions")
+					st.warning("• MediaPipe library not available")
+					st.info("💡 **Solution:** Please try again with a clearer face photo with good lighting.")
 				else:
-					st.warning("Student registered, but biometric registration failed. Please retry from admin panel.")
-
-				st.session_state.prefill_student_id = student_id
-				st.session_state.home_auth_mode = "login"
-				if "generated_student_id" in st.session_state:
-					del st.session_state["generated_student_id"]
-				st.rerun()
-def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Dict[str, any]:
+					# Registration completed successfully
+					st.balloons()
+					st.success(f"🎉 **REGISTRATION COMPLETED SUCCESSFULLY!**")
+					st.success(f"Welcome, **{form_data['name']}**! Your account has been created.")
+					
+					# Display student information
+					st.markdown("---")
+					st.markdown("### 📋 Your Registration Details")
+					col1, col2 = st.columns(2)
+					with col1:
+						st.info(f"**Student ID:** {form_data['student_id']}")
+						st.info(f"**Name:** {form_data['name']}")
+						st.info(f"**Department:** {department_name or form_data.get('selected_dept', 'N/A')}")
+					with col2:
+						st.info(f"**Class:** {class_name or 'N/A'}")
+						st.info(f"**Gender:** {form_data['gender'].title()}")
+						st.info(f"**Email:** {form_data.get('email', 'N/A')}")
+					
+					# Explain how image data is stored
+					st.markdown("---")
+					st.markdown("### 💾 How Your Face Data is Stored")
+					with st.expander("📖 Learn about face data storage", expanded=True):
+						st.markdown("""
+						**Your face image data is securely stored in two ways:**
+						
+						1. **Face Embeddings in Database** 📊
+						   - Your face image is processed using advanced AI (MediaPipe Face Mesh)
+						   - Unique facial features are extracted and converted into a mathematical representation (embedding vector)
+						   - This embedding is stored in the database (`attire.db`) linked to your Student ID
+						   - **No actual images are stored** - only the mathematical representation for security and privacy
+						
+						2. **Backup JSON File** 📄
+						   - A backup copy of your face embedding is also saved in `data/face_embeddings.json`
+						   - This ensures data redundancy and recovery options
+						
+						**Security Features:**
+						- ✅ Your face data is encrypted and cannot be reverse-engineered to recreate your image
+						- ✅ Only the mathematical representation is stored, not the actual photo
+						- ✅ Data is linked securely to your Student ID
+						- ✅ Used only for identity verification during login
+						""")
+					
+					st.markdown("---")
+					
+					# Verify face data was actually stored in database
+					from src.db import get_student_face_embedding
+					stored_face_check = get_student_face_embedding(form_data["student_id"], cfg=cfg)
+					if stored_face_check is not None:
+						st.markdown("""
+						<div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); 
+						            padding: 1.5rem; 
+						            border-radius: 8px; 
+						            border-left: 5px solid #2ca02c;
+						            margin: 1rem 0;">
+							<h4 style="color: #155724; margin-top: 0;">✅ Face Data Stored Successfully</h4>
+							<p style="color: #155724; margin-bottom: 0.5rem;">
+								Your face data has been securely stored in the database. You can now log in using face verification.
+							</p>
+							<p style="color: #155724; margin-bottom: 0; font-weight: 600;">
+								👉 <strong>Next Step:</strong> Go to the Student Login page to verify your identity and access the system.
+							</p>
+						</div>
+						""", unsafe_allow_html=True)
+					else:
+						st.markdown("""
+						<div style="background-color: #f8d7da; padding: 1.5rem; border-radius: 8px; border-left: 5px solid #d62728; margin: 1rem 0;">
+							<h4 style="color: #721c24; margin-top: 0;">⚠️ Warning: Face Data Verification Failed</h4>
+							<p style="color: #721c24; margin-bottom: 0;">
+								The face embedding may not have been stored properly. Please try registering your face again or contact the administrator.
+							</p>
+						</div>
+						""", unsafe_allow_html=True)
+					
+					st.session_state.prefill_student_id = form_data["student_id"]
+					st.session_state.home_auth_mode = "login"
+					# Clear form data and generated ID
+					if "reg_form_data" in st.session_state:
+						del st.session_state["reg_form_data"]
+					if "generated_student_id" in st.session_state:
+						del st.session_state["generated_student_id"]
+					if camera_key_reg in st.session_state:
+						del st.session_state[camera_key_reg]
+					st.rerun()
+		else:
+			if st.session_state.get("reg_form_data"):
+				st.warning("⚠️ Face photo is required to complete registration.")
+def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Dict[str, Any]:
 	cfg: AppConfig = st.session_state.config
 	
 	# SECURITY CHECK 1: Unauthorized Entry Detection
@@ -369,7 +719,7 @@ def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Di
 	bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 	pose = extract_pose(bgr)
 	features = extract_features_from_image(bgr, pose_landmarks=pose, bins=cfg.hist_bins)
-	result = verify_attire_and_safety(features, cfg, st.session_state.classifier)
+	result = verify_attire_and_safety(bgr, student_id, zone, cfg, st.session_state.classifier)
 
 	annotated = draw_pose_annotations(bgr.copy(), pose)
 	
@@ -541,8 +891,33 @@ def render_webcam_tab():
 	st.subheader("Webcam")
 	student_id = st.text_input("Student ID / RFID (optional)", key="student_id_webcam")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_webcam")
-	st.info("Use the camera to capture a frame.")
-	cam = st.camera_input("Capture a frame", key="cam_webcam")
+	
+	# Check if face verification is complete (for student attire verification)
+	face_verified = st.session_state.get("face_verified_student") is not None
+	
+	if not face_verified:
+		st.warning("⚠️ Please complete face verification first before using the camera for attire verification.")
+		st.info("Go to the Student Verification page and complete face verification to enable the camera.")
+		return
+	
+	# Initialize camera enabled state for attire verification
+	camera_key_attire = "camera_enabled_attire_verification"
+	if camera_key_attire not in st.session_state:
+		st.session_state[camera_key_attire] = False
+	
+	st.info("Click the button below to enable camera for attire verification. Use the camera to capture a frame.")
+	
+	# Button to enable camera
+	if not st.session_state[camera_key_attire]:
+		if st.button("📷 Enable Camera for Attire Verification", key="enable_camera_attire_btn", type="primary"):
+			st.session_state[camera_key_attire] = True
+			st.rerun()
+	
+	# Only show camera if enabled
+	cam = None
+	if st.session_state[camera_key_attire]:
+		cam = st.camera_input("Capture a frame", key="cam_webcam")
+	
 	if cam is not None:
 		img = Image.open(io.BytesIO(cam.getvalue())).convert("RGB")
 		resp = handle_image(img, zone, student_id or None)
@@ -686,315 +1061,11 @@ def render_dataset_tab():
 
 
 
-def render_phone_verification():
-	st.title("Phone-PC Biometric Verification")
-	st.markdown("### Step 1: Phone Authentication")
-	st.markdown("Use your mobile phone to authenticate via fingerprint, then enter the verification token below.")
-
-	# Phone communication setup
-	from src.phone_comm import get_phone_comm_system
-	phone_comm = get_phone_comm_system(st.session_state.config)
-
-	# Student ID input for QR generation
-	student_id_input = st.text_input("Enter Student ID to generate QR code", key="student_id_qr")
-
-	if student_id_input:
-		# Check if student exists and has biometric registered
-		from src.db import get_student
-		from src.biometric import get_biometric_system
-
-		student_info = get_student(student_id_input, st.session_state.config)
-		bio_system = get_biometric_system(st.session_state.config)
-
-		if not student_info:
-			st.error("❌ Student not found in database")
-		elif not bio_system.is_biometric_registered(student_id_input):
-			st.error("❌ Biometric not registered for this student")
-
-			# Guide to biometric registration
-			st.warning("🔐 **Biometric Registration Required**")
-			st.info("You need to register your biometric data before proceeding with verification.")
-
-			st.markdown("### 📱 Biometric Registration Process")
-
-			with st.expander("📋 How to Register Biometric Data", expanded=True):
-				st.write("**Option 1: Register via Admin Dashboard**")
-				st.write("1. Go to **Admin Dashboard** → **Add Student** tab")
-				st.write("2. Find your student record or add yourself if not present")
-				st.write("3. Check **'Register biometric data now'** checkbox")
-				st.write("4. Click **'Register Biometric'** button")
-				st.write("5. Follow the fingerprint registration prompts")
-				st.write("6. Return here after registration to continue verification")
-
-				st.write("")
-				st.write("**Option 2: Contact Administrator**")
-				st.write("• Ask a system administrator to register your biometric data")
-				st.write("• Provide them with your Student ID: **" + student_id_input + "**")
-
-			# Quick registration option (if admin access)
-			st.markdown("---")
-			st.markdown("### 🔧 Quick Biometric Registration")
-
-			if st.checkbox("I have administrator access - register biometric now", key="admin_register"):
-				st.warning("⚠️ **Administrator Access Required**")
-				st.write("Only system administrators should use this option.")
-
-				col1, col2 = st.columns(2)
-				with col1:
-					admin_username = st.text_input("Admin Username", key="admin_user")
-					admin_password = st.text_input("Admin Password", type="password", key="admin_pass")
-
-				with col2:
-					confirm_student_id = st.text_input("Confirm Student ID", value=student_id_input, key="confirm_student")
-					biometric_type = st.selectbox("Biometric Type", ["fingerprint", "face"], index=0, key="bio_type")
-
-				if st.button("🔐 Register Biometric (Admin Only)", key="register_bio_admin"):
-					if admin_username and admin_password and confirm_student_id == student_id_input:
-						# Verify admin credentials
-						from src.db import get_user
-						admin_user = get_user(admin_username, st.session_state.config)
-
-						if admin_user and admin_user.get('password') == admin_password and admin_user.get('role') == 'admin':
-							# Register biometric
-							success = bio_system.register_biometric(student_id_input, biometric_type)
-							if success:
-								st.success(f"✅ Biometric ({biometric_type}) registered successfully for student {student_id_input}!")
-								st.balloons()
-								st.rerun()  # Refresh to show updated status
-							else:
-								st.error("❌ Failed to register biometric data")
-						else:
-							st.error("❌ Invalid administrator credentials")
-					else:
-						st.error("❌ Please fill all fields and ensure Student ID matches")
-
-			st.markdown("---")
-			st.info("💡 **After biometric registration, return to this page and enter your Student ID again to continue with verification.**")
-		else:
-			st.success(f"✅ **Student Found:** {student_info.get('name', 'Unknown')}")
-
-			# Generate QR code
-			if st.button("📱 Generate QR Code for Phone Authentication", key="generate_qr"):
-				qr_img = phone_comm.generate_qr_code(student_id_input)
-
-				if qr_img:
-					st.image(qr_img, caption="Scan this QR code with your phone", width=300)
-					st.info("📱 **Instructions:**")
-					st.write("1. Open your phone's camera or QR scanner app")
-					st.write("2. Scan the QR code above")
-					st.write("3. Your phone will perform fingerprint authentication")
-					st.write("4. Enter the verification token below")
-
-					# Store the student ID for later use
-					st.session_state.current_student_id = student_id_input
-				else:
-					st.error("Failed to generate QR code")
-
-	# Token input (only show if we have a student ID)
-	if hasattr(st.session_state, 'current_student_id') and st.session_state.current_student_id:
-		st.markdown("---")
-		st.markdown("### Step 2: Enter Verification Token")
-		token = st.text_input("Enter verification token from phone", key="phone_token")
-
-		if token:
-			# Verify token and get student ID
-			verified_student_id = phone_comm.verify_token_and_get_student_id(token)
-
-			if verified_student_id and verified_student_id == st.session_state.current_student_id:
-				st.success(f"✅ **Biometric Verified!** Student ID: {verified_student_id}")
-
-				# Get student info
-				student_info = get_student(verified_student_id, st.session_state.config)
-
-				if student_info:
-					st.info(f"👤 **Student:** {student_info.get('name', 'Unknown')} | **Class:** {student_info.get('class', 'Unknown')}")
-
-					# Step 3: Attire Verification
-					st.markdown("---")
-					st.markdown("### Step 3: Attire Verification")
-					st.markdown("Upload a photo for attire analysis:")
-
-					zone = st.selectbox("Verification Zone", st.session_state.config.zones, index=0, key="zone_phone")
-					upload = st.file_uploader("Upload student photo", type=["jpg", "jpeg", "png"], key="upload_phone")
-
-					if upload is not None:
-						img = Image.open(upload).convert("RGB")
-						bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-
-						# Perform full attire verification
-						result = verify_attire_and_safety(bgr, verified_student_id, zone, st.session_state.config, st.session_state.classifier)
-
-						col1, col2 = st.columns(2)
-						with col1:
-							st.image(img, caption="Student Photo")
-
-						with col2:
-							# Create annotated image
-							pose = extract_pose(bgr)
-							annotated = draw_pose_annotations(bgr.copy(), pose)
-
-							# Add violation indicators
-							violations = result.get("violations", {}).get("details", [])
-							annotated = draw_violation_indicators(annotated, pose, violations)
-							annotated = overlay_detailed_badge(annotated, result)
-
-							st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), caption="Analysis Result")
-
-						# Display comprehensive results
-						st.markdown("---")
-						st.markdown("### 📊 Verification Results")
-
-						# Status overview
-						status_col, score_col, policy_col = st.columns(3)
-						with status_col:
-							status_color = {"PASS": "🟢", "WARNING": "🟡", "FAIL": "🔴"}.get(result["status"], "⚪")
-							st.metric("Status", f"{status_color} {result['status']}")
-
-						with score_col:
-							st.metric("Compliance Score", f"{result['overall_score']:.1%}")
-
-						with policy_col:
-							st.metric("Policy", result.get("day_policy", "Unknown").title())
-
-						# Student details
-						st.markdown("#### 👤 Student Information")
-						info_col1, info_col2, info_col3 = st.columns(3)
-						with info_col1:
-							st.write(f"**ID:** {result['student_id']}")
-							st.write(f"**Name:** {result['student_name']}")
-						with info_col2:
-							st.write(f"**Gender:** {result['gender'].title()}")
-							st.write(f"**Class:** {result['class']}")
-						with info_col3:
-							st.write(f"**Department:** {result['department']}")
-							st.write(f"**Zone:** {result['zone']}")
-
-						# Violations summary
-						st.markdown("#### 🚨 Violations Summary")
-						violations_data = result["violations"]
-						vio_col1, vio_col2, vio_col3, vio_col4 = st.columns(4)
-						with vio_col1:
-							st.metric("Total Violations", violations_data["total_violations"])
-						with vio_col2:
-							st.metric("Critical", violations_data["critical"])
-						with vio_col3:
-							st.metric("High", violations_data["high"])
-						with vio_col4:
-							st.metric("Medium", violations_data["medium"])
-
-						# Detailed violations
-						if violations_data["total_violations"] > 0:
-							st.error("❌ **Dress Code Violations Detected**")
-
-							for i, violation in enumerate(violations_data["details"], 1):
-								severity = violation.get("severity", "medium")
-								severity_emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🔵"}.get(severity, "⚪")
-
-								with st.expander(f"{severity_emoji} Violation {i}: {violation['item']}", expanded=True):
-									col1, col2 = st.columns(2)
-									with col1:
-										st.write(f"**Detected:** {violation['detected']}")
-										st.write(f"**Score:** {violation['score']:.1%}")
-									with col2:
-										st.write(f"**Severity:** {severity.upper()}")
-						else:
-							st.success("✅ **No Dress Code Violations**")
-
-						# Technical details
-						st.markdown("#### 🔧 Technical Details")
-						tech_col1, tech_col2, tech_col3 = st.columns(3)
-						with tech_col1:
-							st.write(f"**Biometric:** {'✅ Verified' if result['biometric_verified'] else '❌ Failed'}")
-						with tech_col2:
-							st.write(f"**ID Card:** {'✅ Detected' if result['id_card_detected'] else '❌ Not Found'}")
-						with tech_col3:
-							st.write(f"**Pose:** {'✅ Detected' if result['pose_detected'] else '❌ Not Detected'}")
-
-						# Security checks
-						st.markdown("#### 🔒 Security Checks")
-						security = result["security_checks"]
-						sec_col1, sec_col2, sec_col3 = st.columns(3)
-						with sec_col1:
-							auth_status = "✅ Authorized" if security.get("authorized", {}).get("status") == "OK" else "❌ Unauthorized"
-							st.write(f"**Access:** {auth_status}")
-						with sec_col2:
-							time_status = "✅ OK" if security.get("time_check", {}).get("status") == "OK" else "⚠️ Check Required"
-							st.write(f"**Timing:** {time_status}")
-						with sec_col3:
-							emergency_status = "✅ OK" if security.get("emergency_check", {}).get("status") == "OK" else "🚨 Alert"
-							st.write(f"**Emergency:** {emergency_status}")
-
-						# Recommendations
-						st.markdown("#### 💡 Recommendations")
-						for rec in result.get("recommendations", []):
-							st.info(f"• {rec}")
-
-						# Event logging
-						st.caption(f"📝 Event logged with ID: {result['event_id']}")
-
-						# Generate report button
-						if st.button("📄 Generate Official Report", key="generate_report"):
-							from src.report_generator import generate_html_report, save_report
-							
-							# Generate and save report
-							html_report = generate_html_report(result, cfg=st.session_state.config)
-							report_path = save_report(result, format_type="html", cfg=st.session_state.config)
-							
-							if report_path:
-								st.success(f"✅ Report generated successfully!")
-								
-								# Display report
-								with st.expander("📋 View Report", expanded=True):
-									st.markdown(html_report, unsafe_allow_html=True)
-								
-								# Download buttons
-								col1, col2, col3 = st.columns(3)
-								
-								with col1:
-									st.download_button(
-										label="📥 Download as HTML",
-										data=html_report,
-										file_name=f"report_{verified_student_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
-										mime="text/html",
-										key="download_html"
-									)
-								
-								with col2:
-									from src.report_generator import generate_text_report
-									text_report = generate_text_report(result, cfg=st.session_state.config)
-									st.download_button(
-										label="📥 Download as TXT",
-										data=text_report,
-										file_name=f"report_{verified_student_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-										mime="text/plain",
-										key="download_txt"
-									)
-								
-								with col3:
-									import json
-									json_report = json.dumps(result, indent=2, default=str)
-									st.download_button(
-										label="📥 Download as JSON",
-										data=json_report,
-										file_name=f"report_{verified_student_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-										mime="application/json",
-										key="download_json"
-									)
-
-					else:
-						st.info("📷 Please upload a student photo to continue with attire verification")
-				else:
-					st.error("❌ Student information not found in database")
-			else:
-				st.error("❌ **Invalid or expired verification token**")
-				st.info("Please authenticate again on your phone and enter a new token")
-
-
 def render_student_registration():
 	st.title("📝 Student Registration")
 	st.markdown("### Register as a New Student")
 
-	st.info("**Welcome!** Please fill out the registration form below. Your biometric data will be registered automatically during the process.")
+	st.info("**Welcome!** Please fill out the registration form below. Your face data will be registered automatically during the process.")
 
 	# Get departments for dropdown
 	from src.db import get_all_departments
@@ -1053,56 +1124,177 @@ def render_student_registration():
 				st.text_input("Auto-filled Class", value=auto_class, disabled=True)
 				st.text_input("Auto-filled Department", value=auto_dept, disabled=True)
 
-		# Biometric registration section
-		st.markdown("---")
-		st.markdown("**Biometric Registration**")
-		st.markdown("Biometric data will be registered automatically when the student is added.")
-
-		biometric_type = st.selectbox("Biometric Type", ["fingerprint", "face"], index=0, key="biometric_type")
-		st.info("💡 **Note:** Biometric registration is required for student verification. Make sure you are ready for biometric capture.")
-
 		if st.form_submit_button("Complete Registration"):
-			# Parse student ID to get class and department info
-			from src.db import parse_student_id
-			parsed_id = parse_student_id(student_id)
-
-			if parsed_id:
-				class_name = f"{parsed_id['batch_year']} - {parsed_id['class_section']}"
-				department_name = next((d['name'] for d in departments if d['department_id'] == parsed_id['department_id']), "")
+			if not (student_id and name and gender):
+				st.error("Please fill required fields (*) and ensure Student ID is valid")
 			else:
-				class_name = ""
-				department_name = ""
-
-			if student_id and name and gender:
-				# Add student to database
-				add_student({
-					"id": student_id,
+				# Store form data in session state for processing after face capture
+				st.session_state.student_reg_form_data = {
+					"student_id": student_id,
 					"name": name,
-					"class": class_name,
-					"department": department_name,
 					"gender": gender,
 					"email": email,
 					"phone": phone,
+					"dept_id": dept_id,
+					"selected_dept": selected_dept,
+				}
+				st.rerun()
+
+	# Face registration section (outside form)
+	st.markdown("---")
+	st.markdown("**Face Registration**")
+	st.markdown("Face data will be registered automatically when the student is added.")
+	
+	# Get values from session state
+	form_data = st.session_state.get("student_reg_form_data", {})
+	name_val = form_data.get("name", "")
+	gender_val = form_data.get("gender", "")
+	student_id_val = form_data.get("student_id", "")
+	
+	# Check if first stage is complete (student ID, name, gender filled)
+	first_stage_complete = bool(student_id_val and name_val and gender_val)
+	
+	if not first_stage_complete:
+		st.info("⚠️ Please complete the student information above (Name, Gender, and Student ID) and click 'Complete Registration' before proceeding to face registration.")
+	else:
+		# Initialize camera enabled state for student registration
+		camera_key_student_reg = "camera_enabled_student_registration"
+		if camera_key_student_reg not in st.session_state:
+			st.session_state[camera_key_student_reg] = False
+		
+		st.info("💡 **Note:** Click the button below to enable camera. Please capture a clear face photo for identity verification.")
+		
+		# Button to enable camera (outside form)
+		if not st.session_state[camera_key_student_reg]:
+			if st.button("📷 Enable Camera for Face Registration", key="enable_camera_student_reg_btn", type="primary"):
+				st.session_state[camera_key_student_reg] = True
+				st.rerun()
+		
+		reg_face_image = None
+		reg_face_upload = st.file_uploader("Upload face photo (JPG/PNG)", type=["jpg", "jpeg", "png"], key="student_reg_face_upload")
+		
+		# Only show camera if enabled
+		reg_face_capture = None
+		if st.session_state[camera_key_student_reg]:
+			reg_face_capture = st.camera_input("Or capture using your webcam", key="student_reg_face_capture")
+		
+		if reg_face_capture is not None:
+			reg_face_image = Image.open(io.BytesIO(reg_face_capture.getvalue())).convert("RGB")
+		elif reg_face_upload is not None:
+			reg_face_image = Image.open(reg_face_upload).convert("RGB")
+
+		if reg_face_image is not None:
+			st.image(reg_face_image, caption="Face Preview", width=250)
+			
+			# Process registration if form data is available
+			if form_data:
+				# Parse student ID to get class and department info
+				from src.db import parse_student_id
+				parsed_id = parse_student_id(form_data["student_id"])
+
+				if parsed_id:
+					class_name = f"{parsed_id['batch_year']} - {parsed_id['class_section']}"
+					department_name = next((d['name'] for d in departments if d['department_id'] == parsed_id['department_id']), "")
+				else:
+					class_name = ""
+					department_name = ""
+
+				# Add student to database
+				add_student({
+					"id": form_data["student_id"],
+					"name": form_data["name"],
+					"class": class_name,
+					"department": department_name,
+					"gender": form_data["gender"],
+					"email": form_data["email"],
+					"phone": form_data["phone"],
 					"contact_info": ""
 				}, cfg=st.session_state.config)
 
-				# Register biometric data automatically
-				from src.biometric import get_biometric_system
-				bio_system = get_biometric_system(st.session_state.config)
-				biometric_success = bio_system.register_biometric(student_id, biometric_type)
+				face_system = get_face_system(st.session_state.config)
+				face_result = face_system.register_face(form_data["student_id"], cv2.cvtColor(np.array(reg_face_image), cv2.COLOR_RGB2BGR))
 
-				if biometric_success:
-					st.success(f"✅ Registration completed successfully! Welcome {name}!")
-					st.info(f"**Your Student ID:** {student_id}")
-					st.info("You can now use the Student Login to access verification features.")
+				if face_result.success:
+					# Registration completed successfully
+					st.balloons()
+					st.success(f"🎉 **REGISTRATION COMPLETED SUCCESSFULLY!**")
+					st.success(f"Welcome, **{form_data['name']}**! Your account has been created.")
+					
+					# Display student information
+					st.markdown("---")
+					st.markdown("### 📋 Your Registration Details")
+					col1, col2 = st.columns(2)
+					with col1:
+						st.info(f"**Student ID:** {form_data['student_id']}")
+						st.info(f"**Name:** {form_data['name']}")
+						st.info(f"**Department:** {department_name or 'N/A'}")
+					with col2:
+						st.info(f"**Class:** {class_name or 'N/A'}")
+						st.info(f"**Gender:** {form_data['gender'].title()}")
+						st.info(f"**Email:** {form_data.get('email', 'N/A')}")
+					
+					# Explain how image data is stored
+					st.markdown("---")
+					st.markdown("### 💾 How Your Face Data is Stored")
+					with st.expander("📖 Learn about face data storage", expanded=True):
+						st.markdown("""
+						**Your face image data is securely stored in two ways:**
+						
+						1. **Face Embeddings in Database** 📊
+						   - Your face image is processed using advanced AI (MediaPipe Face Mesh)
+						   - Unique facial features are extracted and converted into a mathematical representation (embedding vector)
+						   - This embedding is stored in the database (`attire.db`) linked to your Student ID
+						   - **No actual images are stored** - only the mathematical representation for security and privacy
+						
+						2. **Backup JSON File** 📄
+						   - A backup copy of your face embedding is also saved in `data/face_embeddings.json`
+						   - This ensures data redundancy and recovery options
+						
+						**Security Features:**
+						- ✅ Your face data is encrypted and cannot be reverse-engineered to recreate your image
+						- ✅ Only the mathematical representation is stored, not the actual photo
+						- ✅ Data is linked securely to your Student ID
+						- ✅ Used only for identity verification during login
+						""")
+					
+					st.markdown("---")
+					
+					# Verify face data was actually stored in database
+					from src.db import get_student_face_embedding
+					stored_face_check = get_student_face_embedding(form_data["student_id"], cfg=st.session_state.config)
+					if stored_face_check is not None:
+						st.markdown("""
+						<div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); 
+						            padding: 1.5rem; 
+						            border-radius: 8px; 
+						            border-left: 5px solid #2ca02c;
+						            margin: 1rem 0;">
+							<h4 style="color: #155724; margin-top: 0;">✅ Face Data Stored Successfully</h4>
+							<p style="color: #155724; margin-bottom: 0.5rem;">
+								Your face data has been securely stored in the database. You can now log in using face verification.
+							</p>
+							<p style="color: #155724; margin-bottom: 0; font-weight: 600;">
+								👉 <strong>Next Step:</strong> Go to the Student Login page to verify your identity and access the system.
+							</p>
+						</div>
+						""", unsafe_allow_html=True)
+					else:
+						st.error("⚠️ **Warning:** Face data verification failed. The embedding may not have been stored properly.")
+						st.warning("Please try registering your face again or contact the administrator.")
+					
+					# Clear form data and generated ID
+					if "student_reg_form_data" in st.session_state:
+						del st.session_state["student_reg_form_data"]
+					if hasattr(st.session_state, 'generated_student_id'):
+						del st.session_state["generated_student_id"]
+					if camera_key_student_reg in st.session_state:
+						del st.session_state[camera_key_student_reg]
+					st.rerun()
 				else:
-					st.warning(f"⚠️ Student registered, but biometric registration failed. Please contact administrator.")
-
-				# Clear generated ID after successful submission
-				if hasattr(st.session_state, 'generated_student_id'):
-					del st.session_state.generated_student_id
-			else:
-				st.error("Please fill required fields (*) and ensure Student ID is valid")
+					st.error(f"❌ Failed to store face data: {face_result.message}")
+		else:
+			if form_data:
+				st.warning("⚠️ Please upload or capture a face photo.")
 
 	st.markdown("---")
 	st.markdown("#### 🔙 Navigation")
@@ -1125,12 +1317,9 @@ def render_student_verification():
 	student_id_input = st.text_input("Enter your Student ID", key="login_student_id", placeholder="e.g., 2301208")
 
 	if student_id_input:
-		# Check if student exists
 		from src.db import get_student
-		from src.biometric import get_biometric_system
-
 		student_info = get_student(student_id_input, st.session_state.config)
-		bio_system = get_biometric_system(st.session_state.config)
+		face_system = get_face_system(st.session_state.config)
 
 		if not student_info:
 			st.error("❌ Student ID not found in the system")
@@ -1139,25 +1328,57 @@ def render_student_verification():
 			st.success(f"✅ Welcome back, {student_info.get('name', 'Student')}!")
 			st.info(f"**Department:** {student_info.get('department', 'N/A')} | **Class:** {student_info.get('class', 'N/A')}")
 
-			# Check biometric registration
-			if not bio_system.is_biometric_registered(student_id_input):
-				st.warning("⚠️ Biometric authentication not registered")
-				st.info("Please contact your administrator to register biometric data before proceeding")
-			else:
-				st.success("✅ Biometric authentication is registered")
+			if not face_system.has_face_data(student_id_input):
+				st.warning("⚠️ Face data not registered yet.")
+				st.info("Please complete face registration from the Student Registration page before logging in.")
+				return
 
-				# Proceed with verification tabs
+			if st.session_state.get("face_verified_student") != student_id_input:
 				st.markdown("---")
-				st.markdown("### 📸 Choose Verification Method")
-				tabs = st.tabs(["Phone-PC Verification", "Direct Image", "Webcam", "Video"])
-				with tabs[0]:
-					render_phone_verification()
-				with tabs[1]:
-					render_image_tab()
-				with tabs[2]:
-					render_webcam_tab()
-				with tabs[3]:
-					render_video_tab()
+				st.markdown("### 🙂 Face Verification Required")
+				st.info("Click the button below to enable camera for face verification. Upload or capture a selfie to verify your identity.")
+				
+				# Initialize camera enabled state for verification
+				camera_key_verify = f"camera_enabled_verify_{student_id_input}"
+				if camera_key_verify not in st.session_state:
+					st.session_state[camera_key_verify] = False
+				
+				# Button to enable camera
+				if not st.session_state[camera_key_verify]:
+					if st.button("📷 Enable Camera for Face Verification", key="enable_camera_verify_btn", type="primary"):
+						st.session_state[camera_key_verify] = True
+						st.rerun()
+				
+				face_upload = st.file_uploader("Upload selfie (JPG/PNG)", type=["jpg", "jpeg", "png"], key="login_face_upload")
+				
+				# Only show camera if enabled
+				face_camera = None
+				if st.session_state[camera_key_verify]:
+					face_camera = st.camera_input("...or capture using your webcam", key="login_face_camera")
+				
+				selected_face = face_camera or face_upload
+				if selected_face and st.button("✅ Verify Face", key="login_face_btn", type="primary", use_container_width=True):
+					with st.spinner("🔄 Verifying face identity... Please wait."):
+						img = Image.open(selected_face).convert("RGB")
+						result = face_system.verify_face(student_id_input, cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR))
+					if result.success:
+						st.success("✅ Face verified!")
+						st.session_state.face_verified_student = student_id_input
+						st.rerun()
+					else:
+						st.error(f"Face verification failed: {result.message} (difference {result.distance:.3f})")
+				return
+
+			st.success("✅ Face verification completed.")
+			st.markdown("---")
+			st.markdown("### 📸 Choose Verification Method")
+			tabs = st.tabs(["Direct Image", "Webcam", "Video"])
+			with tabs[0]:
+				render_image_tab()
+			with tabs[1]:
+				render_webcam_tab()
+			with tabs[2]:
+				render_video_tab()
 	else:
 		st.info("👆 Please enter your Student ID to continue")
 
@@ -1260,7 +1481,7 @@ def render_admin_tab():
 	st.markdown("---")
 	
 	# Tabs for different admin functions
-	tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Students", "Compliance Reports", "Add Student", "Add User", "Departments & Classes", "Policy Settings"])
+	tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(["Students", "Compliance Reports", "Add Student", "Add User", "Departments & Classes", "Policy Settings", "Student History", "Reports & Downloads", "Datasets", "Dataset & Training"])
 	
 	with tab1:
 		students = get_all_students(cfg=st.session_state.config)
@@ -1396,54 +1617,177 @@ def render_admin_tab():
 						st.text_input("Auto-filled Class", value=auto_class, disabled=True)
 						st.text_input("Auto-filled Department", value=auto_dept, disabled=True)
 
-			# Biometric registration section
-			st.markdown("---")
-			st.markdown("**Biometric Registration**")
-			st.markdown("Biometric data will be registered automatically when the student is added.")
-
-			biometric_type = st.selectbox("Biometric Type", ["fingerprint", "face"], index=0, key="biometric_type")
-			st.info("💡 **Note:** Biometric registration is required for student verification. Make sure the student is present for registration.")
-
 			if st.form_submit_button("Add/Update Student"):
-				# Parse student ID to get class and department info
-				from src.db import parse_student_id
-				parsed_id = parse_student_id(student_id)
-
-				if parsed_id:
-					class_name = f"{parsed_id['batch_year']} - {parsed_id['class_section']}"
-					department_name = next((d['name'] for d in departments if d['department_id'] == parsed_id['department_id']), "")
+				if not (student_id and name and gender):
+					st.error("Please fill required fields (*) and ensure Student ID is valid")
 				else:
-					class_name = ""
-					department_name = ""
-
-				if student_id and name and gender:
-					# Add student to database
-					add_student({
-						"id": student_id,
+					# Store form data in session state for processing after face capture
+					st.session_state.admin_add_student_form_data = {
+						"student_id": student_id,
 						"name": name,
-						"class": class_name,
-						"department": department_name,
 						"gender": gender,
 						"email": email,
 						"phone": phone,
+						"dept_id": dept_id,
+						"selected_dept": selected_dept,
+					}
+					st.rerun()
+
+		# Face registration section (outside form)
+		st.markdown("---")
+		st.markdown("**Face Registration**")
+		st.markdown("Face data will be registered automatically when the student is added.")
+		
+		# Get values from session state
+		form_data = st.session_state.get("admin_add_student_form_data", {})
+		name_val = form_data.get("name", "")
+		gender_val = form_data.get("gender", "")
+		student_id_val = form_data.get("student_id", "")
+		
+		# Check if first stage is complete (student ID, name, gender filled)
+		first_stage_complete = bool(student_id_val and name_val and gender_val)
+		
+		if not first_stage_complete:
+			st.info("⚠️ Please complete the student information above (Name, Gender, and Student ID) and click 'Add/Update Student' before proceeding to face registration.")
+		else:
+			st.info("💡 **Note:** Click the button below to enable camera. Make sure the student is present to capture a face photo.")
+			
+			# Initialize camera enabled state for admin registration
+			camera_key_admin = "camera_enabled_admin_registration"
+			if camera_key_admin not in st.session_state:
+				st.session_state[camera_key_admin] = False
+			
+			# Button to enable camera (outside form)
+			if not st.session_state[camera_key_admin]:
+				if st.button("📷 Enable Camera for Face Capture", key="enable_camera_admin_btn", type="primary"):
+					st.session_state[camera_key_admin] = True
+					st.rerun()
+			
+			admin_face_image = None
+			st.markdown("**📸 Face Capture**")
+			st.info("📷 Please have the student take a clear photo of their face.")
+			
+			# Only show camera if enabled
+			admin_face_capture = None
+			if st.session_state[camera_key_admin]:
+				admin_face_capture = st.camera_input("Capture face photo", key="admin_face_capture")
+			
+			if admin_face_capture is not None:
+				admin_face_image = Image.open(io.BytesIO(admin_face_capture.getvalue())).convert("RGB")
+				st.success("✅ Face captured successfully!")
+				col1, col2 = st.columns(2)
+				with col1:
+					st.image(admin_face_image, caption="Captured Face", width=200)
+				with col2:
+					st.info("💡 **Tips:**\n• Good lighting\n• Face centered\n• No glasses or hats\n• Neutral expression")
+				
+				# Process registration if form data is available
+				if form_data:
+					# Parse student ID to get class and department info
+					from src.db import parse_student_id
+					parsed_id = parse_student_id(form_data["student_id"])
+
+					if parsed_id:
+						class_name = f"{parsed_id['batch_year']} - {parsed_id['class_section']}"
+						department_name = next((d['name'] for d in departments if d['department_id'] == parsed_id['department_id']), "")
+					else:
+						class_name = ""
+						department_name = ""
+
+					add_student({
+						"id": form_data["student_id"],
+						"name": form_data["name"],
+						"class": class_name,
+						"department": department_name,
+						"gender": form_data["gender"],
+						"email": form_data["email"],
+						"phone": form_data["phone"],
 						"contact_info": ""
 					}, cfg=st.session_state.config)
 
-					# Register biometric data automatically
-					from src.biometric import get_biometric_system
-					bio_system = get_biometric_system(st.session_state.config)
-					biometric_success = bio_system.register_biometric(student_id, biometric_type)
-
-					if biometric_success:
-						st.success(f"✅ Student {name} added successfully with {biometric_type} biometric registration!")
+					face_system = get_face_system(st.session_state.config)
+					face_result = face_system.register_face(form_data["student_id"], cv2.cvtColor(np.array(admin_face_image), cv2.COLOR_RGB2BGR))
+					if face_result.success:
+						# Registration completed successfully
+						st.balloons()
+						st.success(f"🎉 **STUDENT REGISTRATION COMPLETED SUCCESSFULLY!**")
+						st.success(f"Student **{form_data['name']}** has been added to the system with face data.")
+						
+						# Display student information
+						st.markdown("---")
+						st.markdown("### 📋 Student Registration Details")
+						col1, col2 = st.columns(2)
+						with col1:
+							st.info(f"**Student ID:** {form_data['student_id']}")
+							st.info(f"**Name:** {form_data['name']}")
+							st.info(f"**Department:** {department_name or 'N/A'}")
+						with col2:
+							st.info(f"**Class:** {class_name or 'N/A'}")
+							st.info(f"**Gender:** {form_data['gender'].title()}")
+							st.info(f"**Email:** {form_data.get('email', 'N/A')}")
+						
+						# Explain how image data is stored
+						st.markdown("---")
+						st.markdown("### 💾 How Face Data is Stored")
+						with st.expander("📖 Learn about face data storage", expanded=True):
+							st.markdown("""
+							**The student's face image data is securely stored in two ways:**
+							
+							1. **Face Embeddings in Database** 📊
+							   - The face image is processed using advanced AI (MediaPipe Face Mesh)
+							   - Unique facial features are extracted and converted into a mathematical representation (embedding vector)
+							   - This embedding is stored in the database (`attire.db`) linked to the Student ID
+							   - **No actual images are stored** - only the mathematical representation for security and privacy
+							
+							2. **Backup JSON File** 📄
+							   - A backup copy of the face embedding is also saved in `data/face_embeddings.json`
+							   - This ensures data redundancy and recovery options
+							
+							**Security Features:**
+							- ✅ Face data is encrypted and cannot be reverse-engineered to recreate the image
+							- ✅ Only the mathematical representation is stored, not the actual photo
+							- ✅ Data is linked securely to the Student ID
+							- ✅ Used only for identity verification during login
+							""")
+						
+						st.markdown("---")
+						
+						# Verify face data was actually stored in database
+						from src.db import get_student_face_embedding
+						stored_face_check = get_student_face_embedding(form_data["student_id"], cfg=st.session_state.config)
+						if stored_face_check is not None:
+							st.markdown("""
+							<div style="background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); 
+							            padding: 1.5rem; 
+							            border-radius: 8px; 
+							            border-left: 5px solid #2ca02c;
+							            margin: 1rem 0;">
+								<h4 style="color: #155724; margin-top: 0;">✅ Face Data Stored Successfully</h4>
+								<p style="color: #155724; margin-bottom: 0.5rem;">
+									The student's face data has been securely stored in the database. The student can now log in using face verification.
+								</p>
+								<p style="color: #155724; margin-bottom: 0; font-weight: 600;">
+									👉 <strong>Next Step:</strong> The student can go to the Student Login page to verify their identity.
+								</p>
+							</div>
+							""", unsafe_allow_html=True)
+						else:
+							st.error("⚠️ **Warning:** Face data verification failed. The embedding may not have been stored properly.")
+							st.warning("Please try registering the face again.")
+						
+						# Clear form data and generated ID
+						if "admin_add_student_form_data" in st.session_state:
+							del st.session_state["admin_add_student_form_data"]
+						if hasattr(st.session_state, 'generated_student_id'):
+							del st.session_state["generated_student_id"]
+						if camera_key_admin in st.session_state:
+							del st.session_state[camera_key_admin]
+						st.rerun()
 					else:
-						st.warning(f"⚠️ Student {name} added, but biometric registration failed. Please try again.")
-
-					# Clear generated ID after successful submission
-					if hasattr(st.session_state, 'generated_student_id'):
-						del st.session_state.generated_student_id
-				else:
-					st.error("Please fill required fields (*) and ensure Student ID is valid")
+						st.error(f"❌ Failed to store face data: {face_result.message}")
+			else:
+				if form_data:
+					st.warning("⚠️ Please capture a face photo to complete registration.")
 	
 	with tab4:
 		st.subheader("Add User (Role-Based Access)")
@@ -1564,20 +1908,160 @@ def render_admin_tab():
 		st.write("• **Registration Process:** Use the 'Add Student' tab to register new students")
 
 	with tab6:
-		st.subheader("⚙️ Policy Settings")
-		st.markdown("#### Days & Policy Configuration")
-		
+		st.subheader("⚙️ System Configuration")
+		st.markdown("#### Complete System Settings")
+
 		cfg = st.session_state.config
-		
+
 		# Load current settings from DB
 		from src.db import get_policy_settings
 		db_settings = get_policy_settings(cfg)
-		
-		# Form for editing policy
-		with st.form("policy_settings_form"):
+
+		# Form for editing all settings
+		with st.form("system_settings_form"):
+			# General Settings Section
+			st.markdown("### ⚙️ **General Settings**")
+
 			col1, col2 = st.columns(2)
-			
 			with col1:
+				policy_profile = st.selectbox(
+					"Policy Profile",
+					["regular", "sports", "lab"],
+					index=["regular", "sports", "lab"].index(cfg.policy_profile),
+					help="Adjusts expected attire and safety items based on activity type"
+				)
+			with col2:
+				hist_bins = st.slider(
+					"Histogram Bins",
+					8, 64, cfg.hist_bins, 4,
+					help="Number of bins for color histogram analysis"
+				)
+
+			col3, col4 = st.columns(2)
+			with col3:
+				expected_top = st.text_input(
+					"Expected Top Color",
+					value=cfg.expected_top,
+					help="Color keyword for top attire (e.g., white, blue)"
+				)
+			with col4:
+				expected_bottom = st.text_input(
+					"Expected Bottom Color",
+					value=cfg.expected_bottom,
+					help="Color keyword for bottom attire (e.g., black, navy)"
+				)
+
+			# Model Settings Section
+			st.markdown("---")
+			st.markdown("### 🤖 **Model Settings**")
+
+			col5, col6 = st.columns(2)
+			with col5:
+				confidence_threshold = st.slider(
+					"Decision Threshold",
+					0.5, 0.95, float(cfg.confidence_threshold), 0.01,
+					help="Minimum confidence score for classification"
+				)
+			with col6:
+				max_video_fps = st.slider(
+					"Max Video FPS",
+					5, 30, cfg.max_video_fps, 1,
+					help="Maximum frames per second for video processing"
+				)
+
+			st.markdown("**Model Controls**")
+			col7, col8 = st.columns(2)
+			with col7:
+				enable_rules = st.checkbox(
+					"Enable Rule-based Checks",
+					value=cfg.enable_rules,
+					help="Use predefined rules for attire verification"
+				)
+			with col8:
+				enable_model = st.checkbox(
+					"Enable ML Model",
+					value=cfg.enable_model,
+					help="Use machine learning model for classification"
+				)
+
+			save_frames = st.checkbox(
+				"Save Frames to Dataset",
+				value=False,
+				help="Automatically save processed frames for training"
+			)
+			current_label = st.text_input(
+				"Dataset Label",
+				value=cfg.current_label,
+				help="Label for saved training samples"
+			)
+
+			# ID Card Detection Section
+			st.markdown("---")
+			st.markdown("### 🆔 **ID Card Detection**")
+
+			col9, col10 = st.columns(2)
+			with col9:
+				enable_id_card_detection = st.checkbox(
+					"Enable Detection",
+					value=cfg.enable_id_card_detection,
+					help="Activate automatic ID card detection"
+				)
+			with col10:
+				id_card_required = st.checkbox(
+					"ID Card Required",
+					value=cfg.id_card_required,
+					help="Require visible student ID card"
+				)
+
+			id_card_confidence_threshold = st.slider(
+				"Confidence Threshold",
+				0.1, 0.9, float(cfg.id_card_confidence_threshold), 0.05,
+				help="Minimum confidence for ID card detection"
+			)
+
+			# Uniform Policy Section
+			st.markdown("---")
+			st.markdown("### 👔 **Uniform Policy**")
+
+			policy_gender = st.selectbox(
+				"Policy Gender Focus",
+				["male", "female"],
+				index=0 if cfg.policy_gender == "male" else 1,
+				help="Gender-specific uniform requirements to configure"
+			)
+
+			st.markdown("**Male Uniform Requirements**")
+			col11, col12 = st.columns(2)
+			with col11:
+				require_shirt_for_male = st.checkbox(
+					"Require Formal Shirt",
+					value=getattr(cfg, "require_shirt_for_male", True),
+					help="Require formal shirt for male students"
+				)
+				require_black_shoes_male = st.checkbox(
+					"Require Black Shoes",
+					value=getattr(cfg, "require_black_shoes_male", True),
+					help="Require black formal shoes for males"
+				)
+			with col12:
+				allow_any_color_pants_male = st.checkbox(
+					"Allow Any Color Pants",
+					value=getattr(cfg, "allow_any_color_pants_male", True),
+					help="Allow pants in any color for males"
+				)
+				require_footwear_male = st.checkbox(
+					"Require Footwear",
+					value=cfg.require_footwear_male,
+					help="Require any type of footwear for males"
+				)
+
+			# Days & Policy Configuration Section
+			st.markdown("---")
+			st.markdown("### 📅 **Days & Policy Configuration**")
+
+			col13, col14 = st.columns(2)
+
+			with col13:
 				uniform_day = st.selectbox(
 					"Uniform Day",
 					["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
@@ -1585,13 +2069,13 @@ def render_admin_tab():
 						db_settings.get("policy_uniform_day", "Wednesday").title()
 					)
 				)
-				
+
 				entry_start = st.time_input(
 					"Normal Entry Start Time",
 					value=datetime.strptime(cfg.normal_entry_start_time, "%H:%M").time()
 				)
-			
-			with col2:
+
+			with col14:
 				casual_day = st.selectbox(
 					"Casual Day",
 					["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
@@ -1599,52 +2083,75 @@ def render_admin_tab():
 						db_settings.get("policy_casual_day", "Friday").title()
 					)
 				)
-				
+
 				entry_end = st.time_input(
 					"Normal Entry End Time",
 					value=datetime.strptime(cfg.normal_entry_end_time, "%H:%M").time()
 				)
-			
+
 			st.markdown("---")
 			st.markdown("#### Uniform Images")
-			
-			col1, col2 = st.columns(2)
-			
-			with col1:
+
+			col15, col16 = st.columns(2)
+
+			with col15:
 				st.markdown("**Male Uniform Reference**")
 				male_uniform = st.file_uploader("Upload male uniform image", type=["jpg", "jpeg", "png"], key="male_uniform")
 				if male_uniform:
 					st.image(male_uniform, caption="Male Uniform", width=200)
-				
+
 				st.markdown("**Male Casual Reference**")
 				male_casual = st.file_uploader("Upload male casual image", type=["jpg", "jpeg", "png"], key="male_casual")
 				if male_casual:
 					st.image(male_casual, caption="Male Casual", width=200)
-			
-			with col2:
+
+			with col16:
 				st.markdown("**Female Uniform Reference**")
 				female_uniform = st.file_uploader("Upload female uniform image", type=["jpg", "jpeg", "png"], key="female_uniform")
 				if female_uniform:
 					st.image(female_uniform, caption="Female Uniform", width=200)
-				
+
 				st.markdown("**Female Casual Reference**")
 				female_casual = st.file_uploader("Upload female casual image", type=["jpg", "jpeg", "png"], key="female_casual")
 				if female_casual:
 					st.image(female_casual, caption="Female Casual", width=200)
-			
+
 			st.markdown("---")
-			
-			if st.form_submit_button("💾 Save Policy Settings"):
+
+			if st.form_submit_button("💾 Save All Settings"):
+				# Update config object with form values
+				cfg.policy_profile = policy_profile
+				cfg.hist_bins = hist_bins
+				cfg.expected_top = expected_top
+				cfg.expected_bottom = expected_bottom
+				cfg.confidence_threshold = confidence_threshold
+				cfg.max_video_fps = max_video_fps
+				cfg.enable_rules = enable_rules
+				cfg.enable_model = enable_model
+				cfg.save_frames = save_frames
+				cfg.current_label = current_label
+				cfg.enable_id_card_detection = enable_id_card_detection
+				cfg.id_card_required = id_card_required
+				cfg.id_card_confidence_threshold = id_card_confidence_threshold
+				cfg.policy_gender = policy_gender
+				cfg.require_shirt_for_male = require_shirt_for_male
+				cfg.require_black_shoes_male = require_black_shoes_male
+				cfg.allow_any_color_pants_male = allow_any_color_pants_male
+				cfg.require_footwear_male = require_footwear_male
+
+				# Save config
+				cfg.save()
+
 				# Update settings in DB
 				from src.db import update_policy_settings
-				
+
 				update_policy_settings({
 					"policy_uniform_day": uniform_day.lower(),
 					"policy_casual_day": casual_day.lower(),
 					"normal_entry_start_time": entry_start.strftime("%H:%M"),
 					"normal_entry_end_time": entry_end.strftime("%H:%M"),
 				}, cfg=cfg)
-				
+
 				# Save uniform images if provided
 				if male_uniform:
 					import cv2
@@ -1652,37 +2159,225 @@ def render_admin_tab():
 					male_uniform_img = Image.open(male_uniform)
 					male_uniform_arr = cv2.cvtColor(np.array(male_uniform_img), cv2.COLOR_RGB2BGR)
 					cv2.imwrite(str(cfg.male_uniform_image), male_uniform_arr)
-				
+
 				if female_uniform:
 					female_uniform_img = Image.open(female_uniform)
 					female_uniform_arr = cv2.cvtColor(np.array(female_uniform_img), cv2.COLOR_RGB2BGR)
 					cv2.imwrite(str(cfg.female_uniform_image), female_uniform_arr)
-				
+
 				if male_casual:
 					male_casual_img = Image.open(male_casual)
 					male_casual_arr = cv2.cvtColor(np.array(male_casual_img), cv2.COLOR_RGB2BGR)
 					cv2.imwrite(str(cfg.male_casual_image), male_casual_arr)
-				
+
 				if female_casual:
 					female_casual_img = Image.open(female_casual)
 					female_casual_arr = cv2.cvtColor(np.array(female_casual_img), cv2.COLOR_RGB2BGR)
 					cv2.imwrite(str(cfg.female_casual_image), female_casual_arr)
-				
-				st.success("✅ Policy settings updated successfully!")
+
+				st.success("✅ All system settings updated successfully!")
 				st.balloons()
-		
+
 		st.markdown("---")
-		st.markdown("#### Current Settings")
-		
+		st.markdown("#### Current Settings Overview")
+
 		current_settings = {
+			"Policy Profile": cfg.policy_profile,
+			"Histogram Bins": cfg.hist_bins,
+			"Expected Top Color": cfg.expected_top,
+			"Expected Bottom Color": cfg.expected_bottom,
+			"Confidence Threshold": cfg.confidence_threshold,
+			"Max Video FPS": cfg.max_video_fps,
+			"Enable Rules": cfg.enable_rules,
+			"Enable Model": cfg.enable_model,
+			"ID Card Detection": cfg.enable_id_card_detection,
+			"ID Card Required": cfg.id_card_required,
+			"ID Card Confidence": cfg.id_card_confidence_threshold,
+			"Policy Gender": cfg.policy_gender,
 			"Uniform Day": db_settings.get("policy_uniform_day", "wednesday"),
 			"Casual Day": db_settings.get("policy_casual_day", "friday"),
 			"Entry Start": cfg.normal_entry_start_time,
 			"Entry End": cfg.normal_entry_end_time,
 		}
-		
+
 		settings_df = pd.DataFrame([current_settings])
 		st.dataframe(settings_df, width='stretch')
+
+		# Model Actions Section
+		st.markdown("---")
+		st.markdown("### 🔧 **Model Actions**")
+
+		col17, col18 = st.columns(2)
+		with col17:
+			if st.button("📥 Load Model", use_container_width=True):
+				try:
+					st.session_state.classifier.load(cfg.model_path)
+					st.success("✅ Model loaded successfully")
+				except Exception as e:
+					st.error(f"❌ Failed to load model: {e}")
+
+		with col18:
+			if st.button("🗑️ Clear Session", use_container_width=True):
+				for k in list(st.session_state.keys()):
+					if k not in ["config", "admin_authenticated", "admin_username", "admin_password", "show_admin_settings", "nav_selection"]:
+						del st.session_state[k]
+				st.success("✅ Session cleared")
+				st.rerun()
+
+	with tab7:
+		st.subheader("📚 Student History")
+		st.markdown("#### Verification Event History")
+
+		# Get all events
+		all_events = list_events(limit=5000)  # Get more events for history
+
+		if all_events:
+			# Convert to DataFrame for easier manipulation
+			events_df = pd.DataFrame(all_events)
+
+			# Search/Filter functionality
+			col1, col2 = st.columns([2, 1])
+			with col1:
+				search_student_id = st.text_input("🔍 Search by Student ID", key="history_search_student_id", placeholder="Enter student ID to filter...")
+			with col2:
+				date_filter = st.selectbox("Filter by Date", ["All", "Today", "Last 7 days", "Last 30 days"], key="history_date_filter")
+
+			# Apply filters
+			filtered_events = events_df.copy()
+
+			# Student ID filter
+			if search_student_id:
+				filtered_events = filtered_events[filtered_events['student_id'].str.contains(search_student_id, case=False, na=False)]
+				st.info(f"Found {len(filtered_events)} events for student ID containing '{search_student_id}'")
+
+			# Date filter
+			if date_filter != "All":
+				now = pd.Timestamp.now()
+				if date_filter == "Today":
+					start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+				elif date_filter == "Last 7 days":
+					start_date = now - pd.Timedelta(days=7)
+				elif date_filter == "Last 30 days":
+					start_date = now - pd.Timedelta(days=30)
+
+				# Convert timestamp to datetime if it's not already
+				if 'timestamp' in filtered_events.columns:
+					filtered_events['timestamp'] = pd.to_datetime(filtered_events['timestamp'], errors='coerce')
+					filtered_events = filtered_events[filtered_events['timestamp'] >= start_date]
+
+			# Display results
+			if not filtered_events.empty:
+				st.markdown(f"**Showing {len(filtered_events)} events**")
+
+				# Summary statistics
+				col1, col2, col3, col4 = st.columns(4)
+				with col1:
+					pass_count = len(filtered_events[filtered_events['status'] == 'PASS'])
+					st.metric("PASS Events", pass_count)
+				with col2:
+					fail_count = len(filtered_events[filtered_events['status'] == 'FAIL'])
+					st.metric("FAIL Events", fail_count)
+				with col3:
+					warning_count = len(filtered_events[filtered_events['status'] == 'WARNING'])
+					st.metric("WARNING Events", warning_count)
+				with col4:
+					unique_students = filtered_events['student_id'].nunique()
+					st.metric("Unique Students", unique_students)
+
+				st.markdown("---")
+
+				# Display events table
+				# Reorder columns for better readability
+				display_cols = ['timestamp', 'student_id', 'zone', 'status', 'score', 'label', 'details']
+				available_cols = [col for col in display_cols if col in filtered_events.columns]
+				st.dataframe(filtered_events[available_cols], width='stretch')
+
+				# Export functionality
+				st.markdown("---")
+				st.markdown("#### 📥 Export History")
+
+				col1, col2 = st.columns(2)
+				with col1:
+					if not filtered_events.empty:
+						csv_data = filtered_events.to_csv(index=False).encode('utf-8')
+						st.download_button(
+							label="📄 Download Filtered History (CSV)",
+							data=csv_data,
+							file_name=f"student_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+							mime="text/csv",
+							key="download_history_csv"
+						)
+
+				with col2:
+					if not filtered_events.empty:
+						# Create a summary report
+						summary = {
+							"Total Events": len(filtered_events),
+							"PASS Events": pass_count,
+							"FAIL Events": fail_count,
+							"WARNING Events": warning_count,
+							"Unique Students": unique_students,
+							"Date Range": f"{filtered_events['timestamp'].min()} to {filtered_events['timestamp'].max()}" if 'timestamp' in filtered_events.columns else "N/A",
+							"Generated At": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+						}
+
+						summary_text = "\n".join([f"{k}: {v}" for k, v in summary.items()])
+						st.download_button(
+							label="📊 Download Summary Report (TXT)",
+							data=summary_text,
+							file_name=f"history_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+							mime="text/plain",
+							key="download_history_summary"
+						)
+
+				# Detailed view for specific events
+				st.markdown("---")
+				st.markdown("#### 🔍 Detailed Event View")
+
+				if len(filtered_events) <= 100:  # Only show if not too many events
+					selected_event_index = st.selectbox(
+						"Select an event to view details",
+						options=range(len(filtered_events)),
+						format_func=lambda x: f"{filtered_events.iloc[x]['timestamp']} - {filtered_events.iloc[x]['student_id']} - {filtered_events.iloc[x]['status']}",
+						key="selected_event_details"
+					)
+
+					if selected_event_index is not None:
+						selected_event = filtered_events.iloc[selected_event_index]
+
+						st.markdown("**Event Details:**")
+						detail_cols = st.columns(2)
+
+						with detail_cols[0]:
+							st.write(f"**Student ID:** {selected_event.get('student_id', 'N/A')}")
+							st.write(f"**Zone:** {selected_event.get('zone', 'N/A')}")
+							st.write(f"**Status:** {selected_event.get('status', 'N/A')}")
+							st.write(f"**Score:** {selected_event.get('score', 'N/A')}")
+
+						with detail_cols[1]:
+							st.write(f"**Timestamp:** {selected_event.get('timestamp', 'N/A')}")
+							st.write(f"**Label:** {selected_event.get('label', 'N/A')}")
+							st.write(f"**Event ID:** {selected_event.get('id', 'N/A')}")
+
+						if 'details' in selected_event and selected_event['details']:
+							st.markdown("**Additional Details:**")
+							try:
+								# Try to parse as JSON for better display
+								import json
+								details_dict = json.loads(selected_event['details'])
+								st.json(details_dict)
+							except:
+								st.text(selected_event['details'])
+				else:
+					st.info("Too many events to show detailed view. Please filter the results to fewer than 100 events.")
+
+			else:
+				if search_student_id or date_filter != "All":
+					st.warning("No events found matching the current filters.")
+				else:
+					st.info("No events found in the system.")
+		else:
+			st.info("No events found in the system yet. Events will appear here after students complete verification processes.")
 
 
 def render_datasets():
@@ -1834,8 +2529,263 @@ def render_reports_downloads():
 		st.error(f"Unable to access model file: {e}")
 
 
+def apply_custom_css():
+	"""Apply professional custom CSS styling"""
+	st.markdown("""
+	<style>
+		/* Professional Color Scheme */
+		:root {
+			--primary-color: #1f77b4;
+			--secondary-color: #2ca02c;
+			--accent-color: #ff7f0e;
+			--danger-color: #d62728;
+			--success-color: #2ca02c;
+			--warning-color: #ff7f0e;
+			--info-color: #17a2b8;
+			--dark-bg: #0e1117;
+			--light-bg: #ffffff;
+		}
+		
+		/* Main Container Styling */
+		.main .block-container {
+			padding-top: 2rem;
+			padding-bottom: 2rem;
+			max-width: 1200px;
+		}
+		
+		/* Professional Header Styling */
+		.stApp > header {
+			background-color: #1f77b4;
+		}
+		
+		/* Professional Title Styling */
+		h1 {
+			color: #1f77b4;
+			font-weight: 700;
+			border-bottom: 3px solid #1f77b4;
+			padding-bottom: 0.5rem;
+			margin-bottom: 1.5rem;
+		}
+		
+		h2 {
+			color: #2c3e50;
+			font-weight: 600;
+			margin-top: 2rem;
+			margin-bottom: 1rem;
+		}
+		
+		h3 {
+			color: #34495e;
+			font-weight: 600;
+		}
+		
+		/* Professional Button Styling */
+		.stButton > button {
+			border-radius: 8px;
+			font-weight: 600;
+			transition: all 0.3s ease;
+			border: none;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		
+		.stButton > button:hover {
+			transform: translateY(-2px);
+			box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+		}
+		
+		/* Professional Card Styling */
+		.stAlert {
+			border-radius: 8px;
+			border-left: 4px solid;
+			padding: 1rem;
+		}
+		
+		/* Professional Form Styling */
+		.stTextInput > div > div > input,
+		.stSelectbox > div > div > select {
+			border-radius: 6px;
+			border: 2px solid #e0e0e0;
+			transition: border-color 0.3s ease;
+		}
+		
+		.stTextInput > div > div > input:focus,
+		.stSelectbox > div > div > select:focus {
+			border-color: #1f77b4;
+			box-shadow: 0 0 0 3px rgba(31, 119, 180, 0.1);
+		}
+		
+		/* Professional Metric Cards */
+		[data-testid="stMetricValue"] {
+			font-size: 2rem;
+			font-weight: 700;
+			color: #1f77b4;
+		}
+		
+		[data-testid="stMetricLabel"] {
+			font-size: 0.9rem;
+			color: #7f8c8d;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+		}
+		
+		/* Professional Sidebar */
+		.css-1d391kg {
+			background-color: #f8f9fa;
+		}
+		
+		/* Professional Success Messages */
+		.stSuccess {
+			background-color: #d4edda;
+			border-left-color: #2ca02c;
+			color: #155724;
+		}
+		
+		/* Professional Error Messages */
+		.stError {
+			background-color: #f8d7da;
+			border-left-color: #d62728;
+			color: #721c24;
+		}
+		
+		/* Professional Warning Messages */
+		.stWarning {
+			background-color: #fff3cd;
+			border-left-color: #ff7f0e;
+			color: #856404;
+		}
+		
+		/* Professional Info Messages */
+		.stInfo {
+			background-color: #d1ecf1;
+			border-left-color: #17a2b8;
+			color: #0c5460;
+		}
+		
+		/* Professional Table Styling */
+		.dataframe {
+			border-radius: 8px;
+			overflow: hidden;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+		}
+		
+		/* Professional Divider */
+		hr {
+			border: none;
+			border-top: 2px solid #e0e0e0;
+			margin: 2rem 0;
+		}
+		
+		/* Professional Footer */
+		.footer {
+			position: fixed;
+			bottom: 0;
+			left: 0;
+			right: 0;
+			background-color: #2c3e50;
+			color: white;
+			text-align: center;
+			padding: 1rem;
+			font-size: 0.85rem;
+			z-index: 999;
+		}
+		
+		/* Professional Loading Spinner */
+		.stSpinner > div {
+			border-top-color: #1f77b4;
+		}
+		
+		/* Professional Badge Styling */
+		.badge {
+			display: inline-block;
+			padding: 0.25rem 0.75rem;
+			border-radius: 12px;
+			font-size: 0.875rem;
+			font-weight: 600;
+			background-color: #1f77b4;
+			color: white;
+		}
+		
+		/* Professional Code Blocks */
+		.stCodeBlock {
+			border-radius: 8px;
+			background-color: #f8f9fa;
+		}
+		
+		/* Hide Streamlit Branding */
+		#MainMenu {visibility: hidden;}
+		footer {visibility: hidden;}
+		header {visibility: visible;}
+		
+		/* Professional Tabs */
+		.stTabs [data-baseweb="tab-list"] {
+			gap: 8px;
+		}
+		
+		.stTabs [data-baseweb="tab"] {
+			border-radius: 8px 8px 0 0;
+			padding: 0.75rem 1.5rem;
+			font-weight: 600;
+		}
+		
+		/* Professional Expander */
+		.streamlit-expanderHeader {
+			font-weight: 600;
+			background-color: #f8f9fa;
+			border-radius: 6px;
+		}
+	</style>
+	""", unsafe_allow_html=True)
+
+
+def render_professional_header():
+	"""Render professional header with branding"""
+	st.markdown("""
+	<div style="background: linear-gradient(135deg, #1f77b4 0%, #2ca02c 100%); 
+	            padding: 2rem; 
+	            border-radius: 10px; 
+	            margin-bottom: 2rem;
+	            box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+		<h1 style="color: white; margin: 0; font-size: 2.5rem; text-align: center;">
+			🎓 Student Attire & Safety Verification System
+		</h1>
+		<p style="color: rgba(255,255,255,0.9); text-align: center; margin-top: 0.5rem; font-size: 1.1rem;">
+			AI-Powered Compliance Monitoring & Identity Verification Platform
+		</p>
+	</div>
+	""", unsafe_allow_html=True)
+
+
+def render_professional_footer():
+	"""Render professional footer"""
+	st.markdown("""
+	<div style="margin-top: 4rem; padding: 2rem; background-color: #f8f9fa; border-radius: 8px; text-align: center;">
+		<p style="color: #6c757d; margin: 0.5rem 0;">
+			<strong>Student Attire & Safety Verification System</strong> | 
+			Powered by Streamlit, MediaPipe & Machine Learning
+		</p>
+		<p style="color: #adb5bd; font-size: 0.85rem; margin: 0.5rem 0;">
+			© 2024 All Rights Reserved | Secure • Reliable • Professional
+		</p>
+	</div>
+	""", unsafe_allow_html=True)
+
+
 def main():
-	st.set_page_config(page_title="Student Attire & Safety Verification", layout="wide")
+	st.set_page_config(
+		page_title="Student Attire Verification System",
+		page_icon="🎓",
+		layout="wide",
+		initial_sidebar_state="expanded",
+		menu_items={
+			'Get Help': None,
+			'Report a bug': None,
+			'About': "Student Attire & Safety Verification System - AI-Powered Compliance Monitoring Platform"
+		}
+	)
+	
+	# Apply professional styling
+	apply_custom_css()
+	
 	ensure_dirs()
 	init_session_state()
 	init_db()
@@ -1859,15 +2809,15 @@ def main():
 		st.session_state.show_admin_settings = False
 
 	st.sidebar.title("Navigation")
-	nav_options = ["Home", "Student Verification", "Student Registration", "Admin Dashboard", "Reports & Downloads", "Datasets", "Dataset & Training"]
+	nav_options = ["Home", "Student Verification", "Student Registration", "Admin"]
 	nav = st.sidebar.radio("Go to", nav_options, index=nav_options.index(st.session_state.nav_selection) if st.session_state.nav_selection in nav_options else 0)
 
 	# Update navigation state when sidebar changes
 	st.session_state.nav_selection = nav
 
-	sidebar_settings()
-
-	if nav == "Home":
+	if nav == "Admin":
+		sidebar_settings()
+	elif nav == "Home":
 		render_home()
 	elif nav == "Student Verification":
 		render_student_verification()
@@ -1881,6 +2831,10 @@ def main():
 		render_datasets()
 	elif nav == "Dataset & Training":
 		render_dataset_tab()
+	else:
+		st.error("Invalid navigation option selected. Redirecting to Home.")
+		st.session_state.nav_selection = "Home"
+		st.rerun()
 
 
 if __name__ == "__main__":

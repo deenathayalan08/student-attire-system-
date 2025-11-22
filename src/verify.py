@@ -209,7 +209,7 @@ def _check_gender_specific_attire(features: Dict[str, Any], gender: str, cfg: Ap
 				})
 				score *= 0.8
 
-		# 3. JEWELRY CHECK (Women - excessive jewelry check)
+		# 4. JEWELRY CHECK (Women - excessive jewelry check)
 		if cfg.enable_jewelry_detection and not cfg.allow_jewelry_female:
 			jewelry_score = features.get("neck_jewelry_presence_score", 0.0)
 			if jewelry_score > cfg.jewelry_tolerance_threshold:
@@ -415,7 +415,7 @@ def verify_attire_and_safety(image: np.ndarray, student_id: str, zone: str = "Ma
 		"security_checks": security_checks,
 
 		# Technical details
-		"biometric_verified": True,  # Already verified by phone
+		"face_verified": True,
 		"id_card_detected": id_card_result["detected"],
 		"id_card_confidence": id_card_result["confidence"],
 		"pose_detected": pose is not None,

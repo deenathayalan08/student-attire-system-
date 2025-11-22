@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -154,6 +155,7 @@ def init_db(cfg: AppConfig | None = None) -> None:
 		_ensure_column("students", "phone", "phone TEXT")
 		_ensure_column("students", "verified", "verified INTEGER DEFAULT 0")
 		_ensure_column("students", "contact_info", "contact_info TEXT")
+		_ensure_column("students", "face_embedding", "face_embedding TEXT")
 
 		# Ensure departments table has department_id column
 		_ensure_column("departments", "department_id", "department_id TEXT UNIQUE")
@@ -276,7 +278,9 @@ def add_student(student_data: Dict[str, Any], cfg: AppConfig | None = None) -> N
 	conn = get_conn(cfg)
 	with conn:
 		conn.execute(
-			"INSERT OR REPLACE INTO students (id, name, class, department, gender, uniform_type, email, phone, contact_info) VALUES (?,?,?,?,?,?,?,?,?)",
+			"""INSERT OR REPLACE INTO students
+			(id, name, class, department, gender, uniform_type, email, phone, contact_info, face_embedding)
+			VALUES (?,?,?,?,?,?,?,?,?,?)""",
 			(
 				student_data.get("id"),
 				student_data.get("name"),
@@ -287,6 +291,7 @@ def add_student(student_data: Dict[str, Any], cfg: AppConfig | None = None) -> N
 				student_data.get("email"),
 				student_data.get("phone"),
 				student_data.get("contact_info"),
+				student_data.get("face_embedding"),
 			)
 		)
 	conn.close()
@@ -544,4 +549,68 @@ def delete_student(student_id: str, cfg: AppConfig | None = None) -> None:
 		conn.execute("DELETE FROM unauthorized_access WHERE student_id = ?", (student_id,))
 		conn.execute("DELETE FROM events WHERE student_id = ?", (student_id,))
 		conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+	conn.close()
+
+
+def update_student_face_embedding(student_id: str, embedding: list | None, cfg: AppConfig | None = None) -> None:
+	conn = get_conn(cfg)
+	with conn:
+		conn.execute(
+			"UPDATE students SET face_embedding = ? WHERE id = ?",
+			(json.dumps(embedding) if embedding is not None else None, student_id)
+		)
+	conn.close()
+
+
+def get_student_face_embedding(student_id: str, cfg: AppConfig | None = None) -> Optional[list]:
+	conn = get_conn(cfg)
+	row = conn.execute("SELECT face_embedding FROM students WHERE id = ?", (student_id,)).fetchone()
+	conn.close()
+	if not row or row[0] is None:
+		return None
+	try:
+		return json.loads(row[0])
+	except Exception:
+		return None
+
+
+def get_system_settings(cfg: AppConfig | None = None) -> Dict[str, Any]:
+	"""Get all system settings from DB"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("SELECT key, value FROM settings WHERE key LIKE 'system_%'").fetchall()
+	conn.close()
+
+	settings = {}
+	for row in rows:
+		key = row['key']
+		value = row['value']
+		# Parse boolean values
+		if value.lower() in ('true', 'false'):
+			settings[key] = value.lower() == 'true'
+		# Try to parse as float
+		elif '.' in value and value.replace('.', '').replace('-', '').isdigit():
+			try:
+				settings[key] = float(value)
+			except ValueError:
+				settings[key] = value
+		# Try to parse as integer
+		elif value.isdigit() or (value.startswith('-') and value[1:].isdigit()):
+			settings[key] = int(value)
+		else:
+			settings[key] = value
+
+	return settings
+
+
+def update_system_settings(settings_dict: Dict[str, Any], cfg: AppConfig | None = None) -> None:
+	"""Update system settings in DB"""
+	conn = get_conn(cfg)
+	with conn:
+		for key, value in settings_dict.items():
+			if key.startswith('system_'):
+				conn.execute(
+					"INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+					(key, str(value))
+				)
 	conn.close()

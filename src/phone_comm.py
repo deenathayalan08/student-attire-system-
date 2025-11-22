@@ -191,30 +191,33 @@ class PhoneCommunication:
         img = qr.make_image(fill_color="black", back_color="white")
         return img
 
-    def generate_biometric_qr(self, student_id: str) -> Tuple[str, Image.Image]:
+    def generate_biometric_qr(self, student_id: str, server_url: str = "http://localhost:5000") -> Tuple[str, Image.Image]:
         """
-        Generate a unique biometric QR code for a student without auto-simulating mobile auth.
+        Generate a unique biometric QR code for a student that opens mobile fingerprint authentication.
+        Each QR code is unique and specific to the student.
+
+        Args:
+            student_id: Student ID
+            server_url: Base URL of the mobile server
 
         Returns:
             (token, qr_image)
         """
         token = self.generate_verification_token(student_id)
 
-        qr_payload = {
-            "type": "student_verification",
-            "student_id": student_id,
-            "token": token,
-            "timestamp": datetime.now().isoformat(),
-            "college_id": self.cfg.college_name.replace(" ", "_").lower()
-        }
-
+        # Create unique URL for this student's biometric verification
+        # This URL will open on the phone and trigger fingerprint sensor
+        verification_url = f"{server_url}/biometric/{student_id}?token={token}"
+        
+        # QR code contains the URL that opens the mobile web page
+        # When scanned with phone camera or Google Lens, it will open this URL
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
             box_size=10,
             border=4,
         )
-        qr.add_data(json.dumps(qr_payload))
+        qr.add_data(verification_url)
         qr.make(fit=True)
 
         qr_image = qr.make_image(fill_color="black", back_color="white")

@@ -133,3 +133,5 @@ datasets/
 
 # Biometric data
 biometric_db.json
+fingerprints.json
+data/fingerprints.json

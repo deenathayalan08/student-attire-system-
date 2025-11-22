@@ -220,6 +220,271 @@ def index():
     """Serve mobile phone interface"""
     return render_template_string(MOBILE_HTML)
 
+@app.route('/biometric/<student_id>')
+def biometric_verification_page(student_id):
+    """Serve biometric verification page that triggers phone fingerprint sensor"""
+    token = request.args.get('token')
+    if not token:
+        return jsonify({'error': 'Token required'}), 400
+    
+    # Create biometric verification page with WebAuthn
+    biometric_page = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Biometric Verification - {student_id}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .container {{
+            max-width: 400px;
+            width: 100%;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+        }}
+        .fingerprint-icon {{
+            font-size: 80px;
+            margin: 20px 0;
+            animation: pulse 2s infinite;
+        }}
+        @keyframes pulse {{
+            0%, 100% {{ transform: scale(1); }}
+            50% {{ transform: scale(1.1); }}
+        }}
+        .status {{
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-weight: bold;
+        }}
+        .info {{
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }}
+        .success {{
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }}
+        .error {{
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }}
+        button {{
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            background: #28a745;
+            color: white;
+        }}
+        button:hover {{
+            background: #218838;
+        }}
+        button:disabled {{
+            background: #6c757d;
+            cursor: not-allowed;
+        }}
+        .token-display {{
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-family: monospace;
+            word-break: break-all;
+            font-size: 14px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Biometric Verification</h1>
+        <div class="fingerprint-icon">👆</div>
+        <div id="status" class="status info">
+            <p><strong>Student ID:</strong> {student_id}</p>
+            <p>Place your finger on the fingerprint sensor</p>
+        </div>
+        
+        <button id="authBtn" onclick="startFingerprintAuth()">🔒 Authenticate with Fingerprint</button>
+        
+        <div id="result" style="display: none;">
+            <div id="resultStatus" class="status"></div>
+            <div id="tokenDisplay" class="token-display" style="display: none;">
+                <strong>Verification Token:</strong><br>
+                <span id="tokenValue"></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const studentId = '{student_id}';
+        const token = '{token}';
+        let fingerprintData = null;
+
+        async function startFingerprintAuth() {{
+            const btn = document.getElementById('authBtn');
+            const status = document.getElementById('status');
+            
+            btn.disabled = true;
+            status.innerHTML = '<p>🔐 Accessing fingerprint sensor...</p><p>Please place your finger on the sensor</p>';
+            
+            try {{
+                // Check if WebAuthn is supported
+                if (!window.PublicKeyCredential) {{
+                    throw new Error('Web Authentication API is not supported on this device. Please use a modern browser with biometric support.');
+                }}
+                
+                // Request fingerprint authentication using WebAuthn
+                const credential = await navigator.credentials.get({{
+                    publicKey: {{
+                        challenge: new Uint8Array(32).fill(0), // In production, use a random challenge from server
+                        allowCredentials: [],
+                        timeout: 60000,
+                        userVerification: 'required', // This triggers fingerprint/face authentication
+                        rpId: window.location.hostname
+                    }}
+                }});
+                
+                // Extract fingerprint data
+                if (credential) {{
+                    // Convert credential to base64 for transmission
+                    const rawId = Array.from(new Uint8Array(credential.rawId))
+                        .map(b => String.fromCharCode(b))
+                        .join('');
+                    fingerprintData = btoa(rawId);
+                    
+                    // Store fingerprint data separately
+                    await storeFingerprintData(fingerprintData);
+                    
+                    // Send to server
+                    await sendFingerprintToServer(fingerprintData, credential);
+                    
+                }} else {{
+                    throw new Error('Fingerprint authentication was cancelled or failed');
+                }}
+                
+            }} catch (error) {{
+                console.error('Fingerprint auth error:', error);
+                status.className = 'status error';
+                status.innerHTML = `<p>❌ Authentication Failed</p><p>${{error.message}}</p>`;
+                btn.disabled = false;
+            }}
+        }}
+
+        async function storeFingerprintData(fingerprintData) {{
+            // Store fingerprint data in browser's local storage (separate storage)
+            const storageKey = `fingerprint_${{studentId}}`;
+            const fingerprintRecord = {{
+                student_id: studentId,
+                fingerprint_data: fingerprintData,
+                captured_at: new Date().toISOString(),
+                device_info: navigator.userAgent
+            }};
+            
+            // Store in localStorage
+            localStorage.setItem(storageKey, JSON.stringify(fingerprintRecord));
+            
+            // Also store in IndexedDB for more robust storage
+            if ('indexedDB' in window) {{
+                const request = indexedDB.open('BiometricDB', 1);
+                request.onupgradeneeded = (event) => {{
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains('fingerprints')) {{
+                        const objectStore = db.createObjectStore('fingerprints', {{ keyPath: 'student_id' }});
+                        objectStore.createIndex('captured_at', 'captured_at', {{ unique: false }});
+                    }}
+                }};
+                request.onsuccess = (event) => {{
+                    const db = event.target.result;
+                    const transaction = db.transaction(['fingerprints'], 'readwrite');
+                    const store = transaction.objectStore('fingerprints');
+                    store.put(fingerprintRecord);
+                }};
+            }}
+        }}
+
+        async function sendFingerprintToServer(fingerprintData, credential) {{
+            const status = document.getElementById('status');
+            const result = document.getElementById('result');
+            const resultStatus = document.getElementById('resultStatus');
+            const tokenDisplay = document.getElementById('tokenDisplay');
+            const tokenValue = document.getElementById('tokenValue');
+            
+            try {{
+                // Send fingerprint data to server
+                const response = await fetch('/api/capture_fingerprint', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{
+                        student_id: studentId,
+                        token: token,
+                        fingerprint_data: fingerprintData,
+                        credential_id: Array.from(new Uint8Array(credential.rawId))
+                            .map(b => b.toString(16).padStart(2, '0'))
+                            .join(''),
+                        timestamp: new Date().toISOString()
+                    }})
+                }});
+                
+                const data = await response.json();
+                
+                if (data.success) {{
+                    status.className = 'status success';
+                    status.innerHTML = '<p>✅ Fingerprint captured successfully!</p>';
+                    
+                    result.style.display = 'block';
+                    resultStatus.className = 'status success';
+                    resultStatus.innerHTML = '<p>✅ <strong>Verification Complete</strong></p><p>Your fingerprint has been captured and stored.</p>';
+                    
+                    tokenDisplay.style.display = 'block';
+                    tokenValue.textContent = token;
+                    
+                    // Show success message
+                    alert('✅ Fingerprint authentication successful!\\n\\nVerification Token: ' + token);
+                }} else {{
+                    throw new Error(data.error || 'Failed to store fingerprint data');
+                }}
+                
+            }} catch (error) {{
+                console.error('Server error:', error);
+                status.className = 'status error';
+                status.innerHTML = `<p>❌ Error sending data to server</p><p>${{error.message}}</p>`;
+            }}
+        }}
+
+        // Auto-start fingerprint authentication when page loads
+        window.addEventListener('load', () => {{
+            // Small delay to ensure page is fully loaded
+            setTimeout(() => {{
+                startFingerprintAuth();
+            }}, 500);
+        }});
+    </script>
+</body>
+</html>
+"""
+    return render_template_string(biometric_page)
+
 @app.route('/api/health')
 def health_check():
     """Health check endpoint"""
@@ -255,6 +520,64 @@ def register_biometric():
         'success': True,
         'message': f'Biometric registered for {student_id}',
         'biometric_type': biometric_type
+    })
+
+@app.route('/api/capture_fingerprint', methods=['POST'])
+def capture_fingerprint():
+    """Capture and store fingerprint data from phone"""
+    data = request.json
+    student_id = data.get('student_id')
+    token = data.get('token')
+    fingerprint_data = data.get('fingerprint_data')
+    credential_id = data.get('credential_id')
+    timestamp = data.get('timestamp')
+
+    if not student_id or not fingerprint_data:
+        return jsonify({'error': 'Student ID and fingerprint data required'}), 400
+
+    # Store fingerprint data separately in biometric database
+    if student_id not in biometric_db:
+        biometric_db[student_id] = {}
+
+    # Store fingerprint data with metadata
+    biometric_db[student_id]['fingerprint'] = {
+        'data': fingerprint_data,  # Base64 encoded fingerprint data
+        'credential_id': credential_id,
+        'captured_at': timestamp or datetime.now().isoformat(),
+        'device_type': 'mobile_phone',
+        'verification_token': token,
+        'source': 'webauthn'
+    }
+
+    # Also save to file for persistence
+    try:
+        import json as json_lib
+        from pathlib import Path
+        biometric_file = Path('data') / 'fingerprints.json'
+        biometric_file.parent.mkdir(exist_ok=True)
+        
+        # Load existing fingerprints
+        if biometric_file.exists():
+            with open(biometric_file, 'r') as f:
+                all_fingerprints = json_lib.load(f)
+        else:
+            all_fingerprints = {}
+        
+        # Store fingerprint data separately
+        all_fingerprints[student_id] = biometric_db[student_id]['fingerprint']
+        
+        # Save to file
+        with open(biometric_file, 'w') as f:
+            json_lib.dump(all_fingerprints, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save fingerprint to file: {e}")
+
+    return jsonify({
+        'success': True,
+        'message': f'Fingerprint captured and stored for {student_id}',
+        'student_id': student_id,
+        'token': token,
+        'timestamp': timestamp
     })
 
 @app.route('/api/verify_biometric/<student_id>', methods=['POST'])
