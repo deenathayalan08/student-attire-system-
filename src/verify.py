@@ -12,42 +12,42 @@ from .security import check_and_alert_unauthorized_student, check_and_log_entry_
 
 
 def _keyword_score_from_hue(mean_h: float, keyword: str) -> float:
-	"""Very rough mapping from hue to color keyword"""
-	# hue in [0,180]: 0 red, 30 yellow, 60 green, 90 cyan, 120 blue, 150 magenta
-	kw = (keyword or "").lower()
-	if kw in ("white", "light"):
-		return 0.7
-	if kw in ("dark", "black"):
-		return 0.7
-	if kw == "blue":
-		return float(np.exp(-((mean_h - 120.0) ** 2) / (2 * 12.0 ** 2)))
-	if kw == "green":
-		return float(np.exp(-((mean_h - 60.0) ** 2) / (2 * 15.0 ** 2)))
-	if kw == "red":
-		return float(np.exp(-((mean_h - 0.0) ** 2) / (2 * 15.0 ** 2)))
-	if kw == "yellow":
-		return float(np.exp(-((mean_h - 30.0) ** 2) / (2 * 15.0 ** 2)))
-	if kw == "purple":
-		return float(np.exp(-((mean_h - 150.0) ** 2) / (2 * 15.0 ** 2)))
-	return 0.0
+    """Very rough mapping from hue to color keyword"""
+    # hue in [0,180]: 0 red, 30 yellow, 60 green, 90 cyan, 120 blue, 150 magenta
+    kw = (keyword or "").lower()
+    if kw in ("white", "light"):
+        return 0.7
+    if kw in ("dark", "black"):
+        return 0.7
+    if kw == "blue":
+        return float(np.exp(-((mean_h - 120.0) ** 2) / (2 * 12.0 ** 2)))
+    if kw == "green":
+        return float(np.exp(-((mean_h - 60.0) ** 2) / (2 * 15.0 ** 2)))
+    if kw == "red":
+        return float(np.exp(-((mean_h - 0.0) ** 2) / (2 * 15.0 ** 2)))
+    if kw == "yellow":
+        return float(np.exp(-((mean_h - 30.0) ** 2) / (2 * 15.0 ** 2)))
+    if kw == "purple":
+        return float(np.exp(-((mean_h - 150.0) ** 2) / (2 * 15.0 ** 2)))
+    return 0.0
 
 
 def _get_current_day_policy(cfg: AppConfig) -> str:
-	"""Get current day policy (uniform/casual) based on day-of-week settings"""
-	from datetime import datetime
-	
-	current_day = datetime.now().strftime("%A").lower()
-	
-	# Check if it's a casual day
-	if current_day in [d.lower() for d in cfg.casual_days]:
-		return "casual"
-	
-	# Check if it's a uniform day
-	if current_day in [d.lower() for d in cfg.uniform_days]:
-		return "uniform"
-	
-	# Default policy for other days
-	return cfg.policy_other_days
+    """Get current day policy (uniform/casual) based on day-of-week settings"""
+    from datetime import datetime
+    
+    current_day = datetime.now().strftime("%A").lower()
+    
+    # Check if it's a casual day
+    if current_day in [d.lower() for d in cfg.casual_days]:
+        return "casual"
+    
+    # Check if it's a uniform day
+    if current_day in [d.lower() for d in cfg.uniform_days]:
+        return "uniform"
+    
+    # Default policy for other days
+    return cfg.policy_other_days
 
 
 def _check_gender_specific_attire(features: Dict[str, Any], gender: str, cfg: AppConfig, day_policy: str = "uniform") -> Dict[str, Any]:

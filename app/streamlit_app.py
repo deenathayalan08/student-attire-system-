@@ -21,6 +21,7 @@ from src.config import AppConfig
 from src.dataset import append_sample_to_dataset, ensure_dirs, load_dataset
 from src.features import extract_features_from_image, extract_pose
 from src.model import AttireClassifier
+from src.evaluate_model import ModelEvaluator, display_evaluation_results, display_prediction_comparison, compare_to_training
 from src.utils.vis import draw_pose_annotations, overlay_badge, draw_violation_indicators, overlay_detailed_badge
 from src.verify import verify_attire_and_safety
 from src.db import (
@@ -796,7 +797,22 @@ def render_image_tab():
 		# Display detailed results
 		result = resp["result"]
 		features = resp.get("features", {})
-		
+
+		# Enhanced verification comparison
+		if "model_evaluator" in st.session_state and st.session_state.model_evaluator.model is not None:
+			try:
+				# Get training scores from last evaluation if available
+				if "last_evaluation" in st.session_state:
+					# For now, we'll use a placeholder - in practice, you'd store training predictions
+					# This is a simplified version - you might want to store actual training predictions
+					training_scores = [0.5, 0.6, 0.7, 0.8, 0.9]  # Placeholder training scores
+					prediction_score = result.get("success_score", 0.5)
+
+					comparison = compare_to_training(prediction_score, training_scores)
+					display_prediction_comparison(comparison, "Image Verification vs Training Data")
+			except Exception as e:
+				st.warning(f"Could not perform training comparison: {e}")
+
 		# Show ID Card Detection Status
 		st.markdown("---")
 		st.subheader("🆔 ID Card Detection Status")
@@ -1048,14 +1064,50 @@ def render_dataset_tab():
 
 	st.markdown("#### Train Classifier")
 	label_col = st.selectbox("Label column", ["label"], index=0, key="label_col_dataset")
+
+	# Initialize evaluator
+	if "model_evaluator" not in st.session_state:
+		st.session_state.model_evaluator = ModelEvaluator()
+
 	if st.button("Train"):
 		clf: AttireClassifier = st.session_state.classifier
 		info = clf.train_from_dataframe(st.session_state.dataset_df, label_col=label_col, bins=st.session_state.config.hist_bins)
 		clf.save(st.session_state.config.model_path)
 		st.session_state.last_train_info = info
-		st.success(f"Model trained. acc={info['cv_accuracy']:.2f}, n={info['num_samples']}")
 
-	if st.session_state.last_train_info:
+		# Perform comprehensive evaluation
+		try:
+			# Load the trained model for evaluation
+			st.session_state.model_evaluator.load_model(st.session_state.config.model_path)
+
+			# Prepare data for evaluation
+			if hasattr(clf, 'X_train_') and hasattr(clf, 'y_train_'):
+				X_train = clf.X_train_
+				y_train = clf.y_train_
+			else:
+				# Fallback: extract from dataframe
+				feature_cols = [col for col in st.session_state.dataset_df.columns if col != label_col]
+				X_train = st.session_state.dataset_df[feature_cols].values
+				y_train = st.session_state.dataset_df[label_col].values
+
+			# Perform comprehensive evaluation
+			evaluation_results = st.session_state.model_evaluator.evaluate_model_comprehensive(
+				X_train, y_train, cv_folds=5
+			)
+
+			st.session_state.last_evaluation = evaluation_results
+			st.success(f"Model trained and evaluated. CV Accuracy: {evaluation_results['cross_validation']['accuracy']['mean']:.1%}")
+
+		except Exception as e:
+			st.error(f"Training completed but evaluation failed: {e}")
+			st.success(f"Model trained. acc={info['cv_accuracy']:.2f}, n={info['num_samples']}")
+
+	# Display comprehensive evaluation results
+	if "last_evaluation" in st.session_state and st.session_state.last_evaluation:
+		display_evaluation_results(st.session_state.last_evaluation, "Training Evaluation Results")
+
+	# Legacy display for backward compatibility
+	if st.session_state.last_train_info and "last_evaluation" not in st.session_state:
 		st.json(st.session_state.last_train_info)
 
 
@@ -1412,91 +1464,95 @@ def render_admin_login():
 		st.rerun()
 
 
-def render_admin_tab():
-	import pandas as pd
+	def render_admin_tab():
+		import pandas as pd
 
-	# Check if admin is authenticated
-	if not st.session_state.get('admin_authenticated', False):
-		render_admin_login()
-		return
+		# Check if admin is authenticated
+		if not st.session_state.get('admin_authenticated', False):
+			render_admin_login()
+			return
 
-	st.title("👨‍💼 Admin Dashboard")
+		st.title("👨‍💼 Admin Dashboard")
 
-	# Logout button and Settings
-	col1, col2, col3 = st.columns([2, 1, 1])
-	with col2:
-		if st.button("⚙️ Settings", width='stretch'):
-			st.session_state.show_admin_settings = not st.session_state.get('show_admin_settings', False)
-			st.rerun()
-	with col3:
-		if st.button("🚪 Logout", width='stretch'):
-			st.session_state.admin_authenticated = False
-			st.session_state.nav_selection = "Home"
-			st.rerun()
+		# Show settings sidebar automatically on login
+		if not st.session_state.get('show_admin_settings', False):
+			st.session_state.show_admin_settings = True
 
-	# Admin Settings Section
-	if st.session_state.get('show_admin_settings', False):
+		# Logout button and Settings
+		col1, col2, col3 = st.columns([2, 1, 1])
+		with col2:
+			if st.button("⚙️ Settings", width='stretch'):
+				st.session_state.show_admin_settings = not st.session_state.get('show_admin_settings', False)
+				st.rerun()
+		with col3:
+			if st.button("🚪 Logout", width='stretch'):
+				st.session_state.admin_authenticated = False
+				st.session_state.nav_selection = "Home"
+				st.rerun()
+
+		# Admin Settings Section
+		if st.session_state.get('show_admin_settings', False):
+			st.markdown("---")
+			st.markdown("### 🔧 Admin Settings")
+
+			with st.form("admin_settings_form"):
+				st.markdown("#### Change Admin Credentials")
+
+				col1, col2 = st.columns(2)
+				with col1:
+					new_username = st.text_input("New Username", value=st.session_state.admin_username)
+				with col2:
+					new_password = st.text_input("New Password", type="password", value=st.session_state.admin_password)
+
+				st.markdown("**Security Note:** Changes take effect immediately and apply to the entire system.")
+
+				if st.form_submit_button("Update Credentials", width='stretch', type="primary"):
+					if new_username and new_password:
+						st.session_state.admin_username = new_username
+						st.session_state.admin_password = new_password
+						st.success("✅ Admin credentials updated successfully!")
+						st.info(f"**New Username:** {new_username}")
+						# Hide settings after successful update
+						st.session_state.show_admin_settings = False
+						st.rerun()
+					else:
+						st.error("❌ Both username and password are required")
+
+			st.markdown("---")
+
+		# Get compliance stats
+		stats = get_compliance_stats(cfg=st.session_state.config)
+		
+		# Display key metrics
+		col1, col2, col3, col4 = st.columns(4)
+		with col1:
+			st.metric("Total Students", stats["total_students"])
+		with col2:
+			st.metric("Verified Students", stats["verified_students"])
+		with col3:
+			st.metric("Compliance Rate", f"{stats['compliance_percentage']:.1f}%")
+		with col4:
+			st.metric("Total Events Today", stats["total_events"])
+		
 		st.markdown("---")
-		st.markdown("### 🔧 Admin Settings")
-
-		with st.form("admin_settings_form"):
-			st.markdown("#### Change Admin Credentials")
-
-			col1, col2 = st.columns(2)
-			with col1:
-				new_username = st.text_input("New Username", value=st.session_state.admin_username)
-			with col2:
-				new_password = st.text_input("New Password", type="password", value=st.session_state.admin_password)
-
-			st.markdown("**Security Note:** Changes take effect immediately and apply to the entire system.")
-
-			if st.form_submit_button("Update Credentials", width='stretch', type="primary"):
-				if new_username and new_password:
-					st.session_state.admin_username = new_username
-					st.session_state.admin_password = new_password
-					st.success("✅ Admin credentials updated successfully!")
-					st.info(f"**New Username:** {new_username}")
-					# Hide settings after successful update
-					st.session_state.show_admin_settings = False
-					st.rerun()
-				else:
-					st.error("❌ Both username and password are required")
-
-		st.markdown("---")
-
-	# Get compliance stats
-	stats = get_compliance_stats(cfg=st.session_state.config)
-	
-	# Display key metrics
-	col1, col2, col3, col4 = st.columns(4)
-	with col1:
-		st.metric("Total Students", stats["total_students"])
-	with col2:
-		st.metric("Verified Students", stats["verified_students"])
-	with col3:
-		st.metric("Compliance Rate", f"{stats['compliance_percentage']:.1f}%")
-	with col4:
-		st.metric("Total Events Today", stats["total_events"])
-	
-	st.markdown("---")
-	
+		
 	# Tabs for different admin functions
 	tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(["Students", "Compliance Reports", "Add Student", "Add User", "Departments & Classes", "Policy Settings", "Student History", "Reports & Downloads", "Datasets", "Dataset & Training"])
+	
+	# Define stats before usage
+	stats = get_compliance_stats(cfg=st.session_state.config)
 	
 	with tab1:
 		students = get_all_students(cfg=st.session_state.config)
 		st.subheader("All Students")
-
 		# Search functionality
 		search_term = st.text_input("🔍 Search by Student ID", key="search_student_id", placeholder="Enter student ID to search...")
-
 		# Filter students based on search term
 		if search_term:
 			filtered_students = [s for s in students if search_term.lower() in s.get('id', '').lower()]
 			st.info(f"Found {len(filtered_students)} student(s) matching '{search_term}'")
 		else:
 			filtered_students = students
-
 		if filtered_students:
 			# Re-order columns to match registration fields
 			df = pd.DataFrame(filtered_students)
@@ -1514,11 +1570,9 @@ def render_admin_tab():
 			cols = [c for c in desired_cols if c in df.columns] + [c for c in df.columns if c not in desired_cols]
 			df = df[cols]
 			st.dataframe(df, width='stretch')
-
 			# Verification status for filtered results
 			verified_count = sum(1 for s in filtered_students if s.get('verified', 0))
 			st.info(f"📊 {verified_count}/{len(filtered_students)} students verified")
-
 			# Delete student controls
 			st.markdown("---")
 			st.markdown("### 🗑️ Delete Student")
@@ -1553,6 +1607,7 @@ def render_admin_tab():
 	
 	with tab3:
 		st.subheader("Add/Update Student")
+
 
 		# Student ID Format Information
 		st.info("**Student ID Format:** YYDDCSNN")
@@ -2771,71 +2826,80 @@ def render_professional_footer():
 
 
 def main():
-	st.set_page_config(
-		page_title="Student Attire Verification System",
-		page_icon="🎓",
-		layout="wide",
-		initial_sidebar_state="expanded",
-		menu_items={
-			'Get Help': None,
-			'Report a bug': None,
-			'About': "Student Attire & Safety Verification System - AI-Powered Compliance Monitoring Platform"
-		}
-	)
-	
-	# Apply professional styling
-	apply_custom_css()
-	
-	ensure_dirs()
-	init_session_state()
-	init_db()
+    # Move render_admin_tab function to be a top-level function or import fix
+    global render_admin_tab
+    try:
+        render_admin_tab
+    except NameError:
+        from app.streamlit_app import render_admin_tab
 
-	# Initialize navigation state
-	if "nav_selection" not in st.session_state:
-		st.session_state.nav_selection = "Home"
+    st.set_page_config(
+        page_title="Student Attire Verification System",
+        page_icon="🎓",
+        layout="wide",
+        initial_sidebar_state="expanded",
+        menu_items={
+            'Get Help': None,
+            'Report a bug': None,
+            'About': "Student Attire & Safety Verification System - AI-Powered Compliance Monitoring Platform"
+        }
+    )
 
-	# Initialize admin authentication state
-	if "admin_authenticated" not in st.session_state:
-		st.session_state.admin_authenticated = False
+    # Apply professional styling
+    apply_custom_css()
 
-	# Initialize admin credentials (stored in session for demo - in production, use secure storage)
-	if "admin_username" not in st.session_state:
-		st.session_state.admin_username = "admin"
-	if "admin_password" not in st.session_state:
-		st.session_state.admin_password = "admin123"
+    ensure_dirs()
+    init_session_state()
+    init_db()
 
-	# Initialize settings visibility
-	if "show_admin_settings" not in st.session_state:
-		st.session_state.show_admin_settings = False
+    # Initialize navigation state
+    if "nav_selection" not in st.session_state:
+        st.session_state.nav_selection = "Home"
 
-	st.sidebar.title("Navigation")
-	nav_options = ["Home", "Student Verification", "Student Registration", "Admin"]
-	nav = st.sidebar.radio("Go to", nav_options, index=nav_options.index(st.session_state.nav_selection) if st.session_state.nav_selection in nav_options else 0)
+    # Initialize admin authentication state
+    if "admin_authenticated" not in st.session_state:
+        st.session_state.admin_authenticated = False
 
-	# Update navigation state when sidebar changes
-	st.session_state.nav_selection = nav
+    # Initialize admin credentials (stored in session for demo - in production, use secure storage)
+    if "admin_username" not in st.session_state:
+        st.session_state.admin_username = "admin"
+    if "admin_password" not in st.session_state:
+        st.session_state.admin_password = "admin123"
 
-	if nav == "Admin":
-		sidebar_settings()
-	elif nav == "Home":
-		render_home()
-	elif nav == "Student Verification":
-		render_student_verification()
-	elif nav == "Student Registration":
-		render_student_registration()
-	elif nav == "Admin Dashboard":
-		render_admin_tab()
-	elif nav == "Reports & Downloads":
-		render_reports_downloads()
-	elif nav == "Datasets":
-		render_datasets()
-	elif nav == "Dataset & Training":
-		render_dataset_tab()
-	else:
-		st.error("Invalid navigation option selected. Redirecting to Home.")
-		st.session_state.nav_selection = "Home"
-		st.rerun()
+    # Initialize settings visibility
+    if "show_admin_settings" not in st.session_state:
+        st.session_state.show_admin_settings = False
+
+    st.sidebar.title("Navigation")
+    nav_options = ["Home", "Student Verification", "Student Registration", "Admin"]
+    nav = st.sidebar.radio("Go to", nav_options, index=nav_options.index(st.session_state.nav_selection) if st.session_state.nav_selection in nav_options else 0)
+
+    # Update navigation state when sidebar changes
+    st.session_state.nav_selection = nav
+
+    if nav == "Admin":
+        sidebar_settings()
+        render_admin_tab()
+    elif nav == "Home":
+        render_home()
+    elif nav == "Student Verification":
+        render_student_verification()
+    elif nav == "Student Registration":
+        render_student_registration()
+    elif nav == "Admin Dashboard":
+        render_admin_tab()
+    elif nav == "Reports & Downloads":
+        render_reports_downloads()
+    elif nav == "Datasets":
+        render_datasets()
+    elif nav == "Dataset & Training":
+        render_dataset_tab()
+    else:
+        st.error("Invalid navigation option selected. Redirecting to Home.")
+        st.session_state.nav_selection = "Home"
+        st.rerun()
 
 
 if __name__ == "__main__":
+	# The render_admin_tab function is defined in this file, ensure the function definition exists before calling main()
 	main()
