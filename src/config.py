@@ -118,6 +118,15 @@ class AppConfig:
 	models_dir: Path = Path("models")
 	model_path: Path = Path("models/attire_clf.joblib")
 
+	# Attire color settings
+	male_uniform_color: str = "white"
+	male_shoe_color: str = "black"
+	female_uniform_color: str = "blue"
+	male_pants_color: str = "black"
+
+	# Thresholds
+	warning_threshold: float = 0.5
+
 	def __post_init__(self):
 		if self.zones is None:
 			self.zones = ["Gate", "Classroom", "Lab", "Sports"]

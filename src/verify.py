@@ -298,11 +298,21 @@ def verify_attire_and_safety(image: np.ndarray, student_id: str, zone: str = "Ma
 		}
 
 	# Extract features from image
-	pose = extract_pose(image)
-	features = extract_features_from_image(image, pose_landmarks=pose, bins=cfg.hist_bins)
+	try:
+		pose = extract_pose(image)
+		features = extract_features_from_image(image, pose_landmarks=pose, bins=cfg.hist_bins)
+	except Exception as e:
+		print(f"Feature extraction failed: {e}")
+		features = {}
+		pose = None
 
 	# Detect ID card
-	id_card_result = detect_id_card(image)
+	try:
+		id_card_result = detect_id_card(image)
+	except Exception as e:
+		print(f"ID card detection failed: {e}")
+		id_card_result = {"detected": False, "confidence": 0.0}
+
 	features["id_card_detected"] = id_card_result["detected"]
 	features["id_card_confidence"] = id_card_result["confidence"]
 
@@ -320,10 +330,20 @@ def verify_attire_and_safety(image: np.ndarray, student_id: str, zone: str = "Ma
 
 	# ML-based classification (if classifier available)
 	ml_prediction = None
-	if classifier:
+	if classifier and features:
 		try:
-			ml_prediction = classifier.predict_proba(features)
-			ml_label = classifier.predict(features)[0]
+			# Convert features dict to numpy array for model
+			if isinstance(features, dict):
+				# Assume classifier has feature_names or use default order
+				if hasattr(classifier, 'feature_names') and classifier.feature_names:
+					feature_array = np.array([features.get(name, 0.0) for name in classifier.feature_names])
+				else:
+					feature_array = np.array(list(features.values()))
+				feature_array = feature_array.reshape(1, -1)
+			else:
+				feature_array = features
+			ml_prediction = classifier.predict_proba(feature_array)
+			ml_label = classifier.predict(feature_array)[0]
 		except Exception as e:
 			print(f"ML prediction failed: {e}")
 			ml_prediction = None
