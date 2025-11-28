@@ -99,9 +99,29 @@ def sidebar_settings() -> None:
 
 
 def render_home():
-	st.title("Student Attire & Safety Verification")
-	st.caption("Streamlit + MediaPipe + scikit-learn")
-	st.markdown("Use the sidebar to navigate between Home, Student Verification, Admin Dashboard, and Reports & Downloads.")
+	st.title("🏫 Student Attire Verification System")
+	st.markdown("---")
+
+	st.markdown("""
+	### Welcome!
+
+	Are you a new student or an existing user?
+	""")
+
+	col1, col2 = st.columns(2)
+
+	with col1:
+		if st.button("Register (New Student)", use_container_width=True, type="primary"):
+			st.session_state['auth_action'] = 'register'
+			st.rerun()
+
+	with col2:
+		if st.button("Login (Existing User)", use_container_width=True, type="secondary"):
+			st.session_state['auth_action'] = 'login'
+			st.rerun()
+
+	st.markdown("---")
+	st.caption("Select your option above to proceed.")
 
 
 def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
@@ -726,22 +746,65 @@ def main():
 	ensure_dirs()
 	init_session_state()
 	init_db()
+
+	# Always show sidebar navigation
 	st.sidebar.title("Navigation")
-	nav = st.sidebar.radio("Go to", ["Home", "Student Verification", "Admin Dashboard", "Reports & Downloads", "Datasets", "Dataset & Training"], index=0)
+	nav_options = ["Home", "Student Verification", "Admin Dashboard"]
+	nav = st.sidebar.radio("Go to", nav_options, index=0)
 	sidebar_settings()
 
+	# Import auth UI functions
+	from src.ui.auth_ui import show_login_form, show_registration_form
+
+	# Handle authentication based on navigation
 	if nav == "Home":
-		render_home()
-	elif nav == "Student Verification":
-		render_student_verification()
+		if 'user' not in st.session_state or not st.session_state['user']:
+			auth_action = st.session_state.get('auth_action')
+			if auth_action == 'login':
+				user = show_login_form(st.session_state.config)
+				if user:
+					st.session_state['user'] = user
+					st.rerun()
+			elif auth_action == 'register':
+				user = show_registration_form(st.session_state.config)
+				if user:
+					st.session_state['user'] = user
+					st.rerun()
+			else:
+				render_home()
+		else:
+			render_home()
 	elif nav == "Admin Dashboard":
-		render_admin_tab()
-	elif nav == "Reports & Downloads":
-		render_reports_downloads()
-	elif nav == "Datasets":
-		render_datasets()
-	elif nav == "Dataset & Training":
-		render_dataset_tab()
+		# Check if user is admin
+		user = st.session_state.get('user')
+		if not user or user.get('role') != 'admin':
+			st.title("👨‍💼 Admin Login Required")
+			st.warning("🔒 This area requires administrator access.")
+			st.info("Please enter admin credentials to continue.")
+
+			# Admin login form
+			with st.form("admin_login_form"):
+				admin_username = st.text_input("Username")
+				admin_password = st.text_input("Password", type="password")
+				login_button = st.form_submit_button("Login as Admin")
+
+			if login_button:
+				if admin_username == "admin" and admin_password == "admin123":
+					st.session_state['user'] = {
+						'username': 'admin',
+						'role': 'admin',
+						'full_name': 'System Administrator',
+						'email': 'admin@system.com'
+					}
+					st.success("✅ Admin login successful!")
+					st.rerun()
+				else:
+					st.error("❌ Invalid admin credentials")
+		else:
+			render_admin_tab()
+	else:
+		# Student Verification doesn't require authentication
+		render_student_verification()
 
 
 if __name__ == "__main__":
