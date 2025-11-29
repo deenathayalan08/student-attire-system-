@@ -91,6 +91,37 @@ CREATE TABLE IF NOT EXISTS geofence_events (
 	details TEXT,
 	FOREIGN KEY(student_id) REFERENCES students(id)
 );
+
+CREATE TABLE IF NOT EXISTS departments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT UNIQUE NOT NULL,
+	code TEXT UNIQUE NOT NULL,
+	short_form TEXT,
+	head_name TEXT,
+	head_email TEXT,
+	number_of_classes INTEGER DEFAULT 1,
+	location TEXT,
+	email TEXT,
+	phone TEXT,
+	description TEXT,
+	status TEXT DEFAULT 'active',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS classes (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	department_id INTEGER NOT NULL,
+	class_letter TEXT NOT NULL,
+	class_code TEXT UNIQUE NOT NULL,
+	class_advisor TEXT,
+	room_number TEXT,
+	capacity INTEGER DEFAULT 50,
+	current_enrollment INTEGER DEFAULT 0,
+	status TEXT DEFAULT 'active',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY(department_id) REFERENCES departments(id)
+);
 """
 
 
@@ -143,6 +174,9 @@ def init_db(cfg: AppConfig | None = None) -> None:
 		_ensure_column("students", "phone", "phone TEXT")
 		_ensure_column("students", "verified", "verified INTEGER DEFAULT 0")
 		_ensure_column("students", "contact_info", "contact_info TEXT")
+		_ensure_column("students", "gender", "gender TEXT DEFAULT 'U'")  # M=Male, F=Female, U=Unknown
+
+
 	conn.close()
 
 
@@ -348,3 +382,278 @@ def get_events_for_student(student_id: str, limit: int = 10, cfg: AppConfig | No
 	rows = conn.execute("SELECT * FROM events WHERE student_id = ? ORDER BY timestamp DESC LIMIT ?", (student_id, limit)).fetchall()
 	conn.close()
 	return [dict(r) for r in rows]
+
+
+# ==================== DEPARTMENT MANAGEMENT ====================
+
+def add_department(dept_data: Dict[str, Any], cfg: AppConfig | None = None) -> Tuple[bool, int, str]:
+	"""Add a new department and create classes"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			# Insert department
+			cur = conn.execute(
+				"""INSERT INTO departments
+				(name, code, short_form, head_name, head_email, number_of_classes,
+				 location, email, phone, description, status)
+				VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+				(
+					dept_data.get("name"),
+					dept_data.get("code"),
+					dept_data.get("short_form"),
+					dept_data.get("head_name"),
+					dept_data.get("head_email"),
+					dept_data.get("number_of_classes", 1),
+					dept_data.get("location"),
+					dept_data.get("email"),
+					dept_data.get("phone"),
+					dept_data.get("description"),
+					"active"
+				)
+			)
+			dept_id = cur.lastrowid
+			
+			# Create classes
+			num_classes = int(dept_data.get("number_of_classes", 1))
+			for i in range(num_classes):
+				class_letter = chr(65 + i)  # A, B, C, D...
+				class_code = f"{dept_data.get('code')}-{class_letter}"
+				conn.execute(
+					"""INSERT INTO classes 
+					(department_id, class_letter, class_code, status) 
+					VALUES (?,?,?,?)""",
+					(dept_id, class_letter, class_code, "active")
+				)
+		conn.close()
+		return True, dept_id, "Department created successfully"
+	except sqlite3.IntegrityError as e:
+		conn.close()
+		return False, 0, str(e)
+	except Exception as e:
+		conn.close()
+		return False, 0, str(e)
+
+
+def get_all_departments(cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all departments with student count"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("""
+		SELECT d.*, COUNT(DISTINCT s.id) as total_students
+		FROM departments d
+		LEFT JOIN students s ON s.department = d.name
+		WHERE d.status = 'active'
+		GROUP BY d.id
+		ORDER BY d.name
+	""").fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def get_department_by_id(dept_id: int, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Get department by ID"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	row = conn.execute("SELECT * FROM departments WHERE id = ?", (dept_id,)).fetchone()
+	conn.close()
+	return dict(row) if row else None
+
+
+def get_classes_by_department(dept_id: int, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all classes in a department"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("""
+		SELECT c.*, COUNT(DISTINCT s.id) as student_count
+		FROM classes c
+		LEFT JOIN students s ON s.class = c.class_code
+		WHERE c.department_id = ? AND c.status = 'active'
+		GROUP BY c.id
+		ORDER BY c.class_letter
+	""", (dept_id,)).fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def get_students_by_department(dept_name: str, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all students in a department with gender breakdown"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("""
+		SELECT * FROM students WHERE department = ?
+		ORDER BY class, name
+	""", (dept_name,)).fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def get_department_statistics(dept_id: int, cfg: AppConfig | None = None) -> Dict[str, Any]:
+	"""Get detailed statistics for a department"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	
+	# Get department info
+	dept = conn.execute("SELECT * FROM departments WHERE id = ?", (dept_id,)).fetchone()
+	if not dept:
+		conn.close()
+		return {}
+	
+	dept_name = dept['name']
+	
+	# Get student statistics
+	students = conn.execute("""
+		SELECT gender FROM students WHERE department = ?
+	""", (dept_name,)).fetchall()
+	
+	total_students = len(students)
+	male_count = sum(1 for s in students if s['gender'] == 'M')
+	female_count = sum(1 for s in students if s['gender'] == 'F')
+	unknown_count = total_students - male_count - female_count
+	
+	# Get class statistics
+	classes = conn.execute("""
+		SELECT c.*, COUNT(DISTINCT s.id) as student_count
+		FROM classes c
+		LEFT JOIN students s ON s.class = c.class_code
+		WHERE c.department_id = ?
+		GROUP BY c.id
+	""", (dept_id,)).fetchall()
+	
+	conn.close()
+	
+	return {
+		"total_students": total_students,
+		"male_count": male_count,
+		"female_count": female_count,
+		"unknown_count": unknown_count,
+		"classes": [dict(c) for c in classes]
+	}
+
+
+def update_department(dept_id: int, dept_data: Dict[str, Any], cfg: AppConfig | None = None) -> Tuple[bool, str]:
+	"""Update department information"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute("""
+				UPDATE departments SET
+				name = ?, code = ?, short_form = ?, head_name = ?,
+				head_email = ?, location = ?, email = ?, phone = ?,
+				description = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			""", (
+				dept_data.get("name"),
+				dept_data.get("code"),
+				dept_data.get("short_form"),
+				dept_data.get("head_name"),
+				dept_data.get("head_email"),
+				dept_data.get("location"),
+				dept_data.get("email"),
+				dept_data.get("phone"),
+				dept_data.get("description"),
+				dept_data.get("department_type", "Academic"),
+				dept_id
+			))
+		conn.close()
+		return True, "Department updated successfully"
+	except Exception as e:
+		conn.close()
+		return False, str(e)
+
+
+def delete_department(dept_id: int, cfg: AppConfig | None = None) -> Tuple[bool, str]:
+	"""Delete a department (soft delete)"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute("UPDATE departments SET status = 'inactive' WHERE id = ?", (dept_id,))
+			conn.execute("UPDATE classes SET status = 'inactive' WHERE department_id = ?", (dept_id,))
+		conn.close()
+		return True, "Department deleted successfully"
+	except Exception as e:
+		conn.close()
+		return False, str(e)
+
+
+def update_class_advisor(class_id: int, advisor_name: str, cfg: AppConfig | None = None) -> Tuple[bool, str]:
+	"""Update class advisor"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute("UPDATE classes SET class_advisor = ? WHERE id = ?", (advisor_name, class_id))
+		conn.close()
+		return True, "Class advisor updated"
+	except Exception as e:
+		conn.close()
+		return False, str(e)
+
+
+def update_class_room(class_id: int, room_number: str, cfg: AppConfig | None = None) -> Tuple[bool, str]:
+	"""Update class room number"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute("UPDATE classes SET room_number = ? WHERE id = ?", (room_number, class_id))
+		conn.close()
+		return True, "Room number updated"
+	except Exception as e:
+		conn.close()
+		return False, str(e)
+
+
+def search_departments(search_term: str, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Search departments by name or code"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	rows = conn.execute("""
+		SELECT d.*, COUNT(DISTINCT s.id) as total_students
+		FROM departments d
+		LEFT JOIN students s ON s.department = d.name
+		WHERE (d.name LIKE ? OR d.code LIKE ?) AND d.status = 'active'
+		GROUP BY d.id
+		ORDER BY d.name
+	""", (f"%{search_term}%", f"%{search_term}%")).fetchall()
+	conn.close()
+	return [dict(r) for r in rows]
+
+
+def export_department_report(dept_id: int, cfg: AppConfig | None = None) -> Optional[str]:
+	"""Export department data as CSV string"""
+	import csv
+	import io
+	
+	stats = get_department_statistics(dept_id, cfg)
+	dept = get_department_by_id(dept_id, cfg)
+	students = get_students_by_department(dept['name'], cfg) if dept else []
+	
+	if not dept:
+		return None
+	
+	output = io.StringIO()
+	writer = csv.writer(output)
+	
+	# Header
+	writer.writerow(["Department Report"])
+	writer.writerow([f"Department: {dept['name']}", f"Code: {dept['code']}"])
+	writer.writerow([f"Head: {dept['head_name']}", f"Location: {dept['location']}"])
+	writer.writerow([])
+	
+	# Statistics
+	writer.writerow(["Statistics"])
+	writer.writerow(["Total Students", "Male", "Female", "Unknown"])
+	writer.writerow([stats["total_students"], stats["male_count"], stats["female_count"], stats["unknown_count"]])
+	writer.writerow([])
+	
+	# Student details
+	writer.writerow(["Student ID", "Name", "Class", "Gender", "Email"])
+	for student in students:
+		writer.writerow([
+			student.get("id", ""),
+			student.get("name", ""),
+			student.get("class", ""),
+			student.get("gender", ""),
+			student.get("email", "")
+		])
+	
+	return output.getvalue()
+

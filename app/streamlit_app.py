@@ -20,7 +20,13 @@ from src.features import extract_features_from_image, extract_pose
 from src.model import AttireClassifier
 from src.utils.vis import draw_pose_annotations, overlay_badge, draw_violation_indicators, overlay_detailed_badge
 from src.verify import verify_attire_and_safety
-from src.db import init_db, insert_event, list_events, upsert_setting, get_setting, get_all_students, get_compliance_stats, add_student, update_student_verification, add_user
+from src.db import (
+	init_db, insert_event, list_events, upsert_setting, get_setting, 
+	get_all_students, get_compliance_stats, add_student, update_student_verification, add_user,
+	add_department, get_all_departments, get_department_by_id, get_classes_by_department,
+	get_students_by_department, get_department_statistics, update_department, delete_department,
+	search_departments, export_department_report, update_class_advisor, update_class_room
+)
 from src.alerts import notify_non_compliance, get_id_card_status_message, get_detailed_id_card_message, notify_id_card_status
 from src.security import check_and_alert_unauthorized_student, check_and_log_entry_time, check_and_log_exit_time, check_and_alert_emergency_violations
 
@@ -50,7 +56,21 @@ def ensure_config_defaults(cfg: AppConfig) -> AppConfig:
 
 
 def sidebar_settings() -> None:
-	with st.sidebar.expander("Settings", expanded=False):
+	# Only show settings if user is admin
+	user = st.session_state.get('user')
+	if not user or user.get('role') != 'admin':
+		return
+
+	# Toggle button for settings
+	if 'show_settings' not in st.session_state:
+		st.session_state.show_settings = False
+
+	if st.sidebar.button("⚙️ Settings", key="settings_toggle"):
+		st.session_state.show_settings = not st.session_state.show_settings
+
+	# Show settings content only when toggled
+	if st.session_state.show_settings:
+		st.sidebar.markdown("---")
 		st.sidebar.header("Settings")
 		cfg: AppConfig = ensure_config_defaults(st.session_state.config)
 
@@ -66,7 +86,7 @@ def sidebar_settings() -> None:
 		cfg.enable_model = st.sidebar.checkbox("Enable ML model", value=cfg.enable_model)
 		cfg.save_frames = st.sidebar.checkbox("Save collected frames to dataset", value=False)
 		cfg.current_label = st.sidebar.text_input("Label for saved samples", value=cfg.current_label)
-		
+
 		# ID Card detection settings
 		st.sidebar.markdown("---")
 		st.sidebar.subheader("ID Card Detection")
@@ -519,7 +539,14 @@ def render_admin_tab():
 	st.markdown("---")
 	
 	# Tabs for different admin functions
-	tab1, tab2, tab3, tab4 = st.tabs(["Students", "Compliance Reports", "Add Student", "Add User"])
+	tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+		"Students", 
+		"Compliance Reports", 
+		"Add Student", 
+		"Add User",
+		"➕ Add Department",
+		"📊 Departments"
+	])
 	
 	with tab1:
 		students = get_all_students(cfg=st.session_state.config)
@@ -545,34 +572,92 @@ def render_admin_tab():
 	
 	with tab3:
 		st.subheader("Add/Update Student")
-		with st.form("add_student_form"):
+
+		# Get existing departments for selection
+		from src.db import get_all_departments
+		departments = get_all_departments(cfg=st.session_state.config)
+		dept_options = [""] + [f"{d['name']} ({d['code']})" for d in departments]
+
+		# Stage 1: Student ID Generation
+		st.markdown("### 📝 Stage 1: Generate Student ID")
+		with st.form("student_id_form"):
+			col1, col2 = st.columns(2)
+
+			with col1:
+				batch_year = st.number_input("Batch Year *", min_value=2000, max_value=2100, value=2022, step=1, help="e.g., 2022 for 2022-2026 batch")
+				selected_dept = st.selectbox("Department *", dept_options, index=0, help="Select from existing departments")
+
+			with col2:
+				section_options = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
+				section = st.selectbox("Section *", section_options, index=0, help="A=1, B=2, C=3, etc.")
+				student_number = st.number_input("Student Number *", min_value=1, max_value=999, value=1, step=1, help="Joining order (001-999)")
+
+			# Auto-generate Student ID
+			auto_student_id = ""
+			auto_class = ""
+			if selected_dept and batch_year:
+				# Extract department code and ID
+				dept_name = selected_dept.split(" (")[0] if " (" in selected_dept else selected_dept
+				dept_info = next((d for d in departments if d['name'] == dept_name), None)
+				if dept_info:
+					dept_id = f"{dept_info['id']:02d}"  # 2-digit department ID
+					batch_yy = str(batch_year)[-2:]  # Last 2 digits of year
+					section_num = str(section_options.index(section) + 1)  # 1=A, 2=B, etc.
+					student_num = f"{student_number:03d}"  # 3-digit student number
+					auto_student_id = f"{batch_yy}{dept_id}{section_num}{student_num}"
+					auto_class = f"{dept_info['code']}-{section}"
+
 			col1, col2 = st.columns(2)
 			with col1:
-				student_id = st.text_input("Student ID *")
-				name = st.text_input("Full Name *")
-				class_name = st.text_input("Class *")
-				department = st.text_input("Department")
+				st.text_input("Auto-Generated Student ID", value=auto_student_id, disabled=True, key="auto_student_id")
 			with col2:
-				uniform_type = st.text_input("Uniform Type")
-				email = st.text_input("Email")
-				phone = st.text_input("Phone")
-				contact_info = st.text_input("Contact Info")
-			
-			if st.form_submit_button("Add/Update Student"):
-				if student_id and name and class_name:
+				st.text_input("Auto-Generated Class", value=auto_class, disabled=True, key="auto_class")
+
+			generate_id = st.form_submit_button("Generate ID", use_container_width=True, type="secondary")
+
+		# Stage 2: Student Details (only show if ID is generated)
+		if auto_student_id:
+			st.markdown("---")
+			st.markdown("### 👤 Stage 2: Student Details")
+
+			with st.form("student_details_form"):
+				col1, col2 = st.columns(2)
+
+				with col1:
+					name = st.text_input("Full Name *", key="student_name")
+
+				with col2:
+					# Gender as radio buttons (Male/Female only)
+					gender = st.radio("Gender *", ["Male", "Female"], index=0, key="student_gender_radio")
+					gender_code = "M" if gender == "Male" else "F"
+
+				email = st.text_input("Email", key="student_email")
+				phone = st.text_input("Phone", key="student_phone")
+				contact_info = st.text_area("Contact Info", height=80, key="student_contact")
+
+				if st.form_submit_button("Add Student", use_container_width=True, type="primary"):
+					if not name:
+						st.error("Full Name is required!")
+						return
+
+					# Extract department name for storage
+					dept_name = selected_dept.split(" (")[0] if " (" in selected_dept else selected_dept
+
 					add_student({
-						"id": student_id,
-						"name": name,
-						"class": class_name,
-						"department": department,
-						"uniform_type": uniform_type,
-						"email": email,
-						"phone": phone,
-						"contact_info": contact_info
+						"id": auto_student_id,
+						"name": name.strip(),
+						"class": auto_class,
+						"department": dept_name,
+						"gender": gender_code,
+						"email": email.strip() if email else None,
+						"phone": phone.strip() if phone else None,
+						"contact_info": contact_info.strip() if contact_info else None
 					}, cfg=st.session_state.config)
-					st.success("Student added/updated successfully!")
-				else:
-					st.error("Please fill required fields (*)")
+					st.success(f"✅ Student added successfully! ID: {auto_student_id}")
+					st.info(f"Class: {auto_class} | Department: {dept_name}")
+					st.balloons()
+		else:
+			st.info("👆 Please generate a Student ID first in Stage 1 above.")
 	
 	with tab4:
 		st.subheader("Add User (Role-Based Access)")
@@ -590,6 +675,301 @@ def render_admin_tab():
 					st.success("User added successfully!")
 				else:
 					st.error("Please fill all required fields (*)")
+	
+	with tab5:
+		render_add_department_tab()
+	
+	with tab6:
+		render_departments_tab()
+
+
+def render_add_department_tab():
+	"""Render the Add Department form"""
+	st.subheader("➕ Create New Department")
+
+	with st.form("add_department_form"):
+		col1, col2 = st.columns(2)
+
+		with col1:
+			dept_name = st.text_input("Department Name *", placeholder="e.g., Computer Science")
+			dept_code = st.text_input("Department Code", placeholder="e.g., CS (auto-fill from name)")
+			num_classes = st.number_input("Number of Classes *", min_value=1, max_value=26, value=1, step=1)
+
+		with col2:
+			head_name = st.text_input("Department Head (Optional)", placeholder="e.g., Prof. John Doe")
+			head_email = st.text_input("Head Email (Optional)")
+			location = st.text_input("Location (Optional)", placeholder="e.g., Block A, 2nd Floor")
+
+		dept_email = st.text_input("Department Email (Optional)")
+		dept_phone = st.text_input("Department Phone (Optional)")
+		description = st.text_area("Description (Optional)", height=80)
+
+		submitted = st.form_submit_button("Create Department", use_container_width=True, type="primary")
+
+	if submitted:
+		if not dept_name:
+			st.error("Department Name is required!")
+			return
+
+		# Auto-generate code from name if not provided
+		auto_code = dept_code.strip().upper() if dept_code.strip() else dept_name[:2].upper()
+
+		from src.db import add_department
+
+		dept_data = {
+			"name": dept_name.strip(),
+			"code": auto_code,
+			"short_form": auto_code,
+			"head_name": head_name.strip() if head_name else None,
+			"head_email": head_email.strip() if head_email else None,
+			"number_of_classes": int(num_classes),
+			"location": location.strip() if location else None,
+			"email": dept_email.strip() if dept_email else None,
+			"phone": dept_phone.strip() if dept_phone else None,
+			"description": description.strip() if description else None
+		}
+
+		success, dept_id, message = add_department(dept_data, cfg=st.session_state.config)
+
+		if success:
+			st.success(f"✅ {message}")
+			st.info(f"Department created with {num_classes} classes: {auto_code}-A, {auto_code}-B, etc.")
+			st.rerun()
+		else:
+			st.error(f"❌ Error: {message}")
+
+
+def render_departments_tab():
+	"""Render the Departments management view"""
+	st.subheader("📊 Departments Management")
+	
+	from src.db import get_all_departments, get_department_statistics, update_department, delete_department, search_departments, export_department_report
+	
+	# Search functionality
+	col1, col2 = st.columns([3, 1])
+	with col1:
+		search_term = st.text_input("🔍 Search departments by name or code", key="dept_search")
+	with col2:
+		st.write("")  # Spacing
+		if st.button("🔄 Refresh", key="refresh_depts"):
+			st.rerun()
+	
+	# Get departments
+	if search_term.strip():
+		departments = search_departments(search_term, cfg=st.session_state.config)
+	else:
+		departments = get_all_departments(cfg=st.session_state.config)
+	
+	if not departments:
+		st.info("No departments found. Create one in the '➕ Add Department' tab.")
+		return
+	
+	# Display departments table
+	st.markdown("#### All Departments")
+
+	# Create table data
+	table_data = []
+	for dept in departments:
+		table_data.append({
+			"Department": dept['name'],
+			"Code": dept['code'],
+			"Classes": dept['number_of_classes'],
+			"Students": dept.get('total_students', 0),
+			"Head": dept['head_name'] or "N/A",
+			"Location": dept['location'] or "N/A",
+			"Status": "✅ Active" if dept['status'] == 'active' else "⚠️ Inactive"
+		})
+
+	df_depts = pd.DataFrame(table_data)
+	st.dataframe(df_depts, use_container_width=True, hide_index=True)
+	
+	# Department details section
+	st.markdown("---")
+	st.markdown("#### Department Details & Analytics")
+	
+	# Select department
+	dept_options = [d['name'] for d in departments]
+	selected_dept_name = st.selectbox("Select Department to View Details", dept_options, key="dept_select")
+	
+	if selected_dept_name:
+		# Get full dept info
+		selected_dept = next((d for d in departments if d['name'] == selected_dept_name), None)
+		if selected_dept:
+			dept_id = selected_dept['id']
+			
+			# Create tabs for department details
+			detail_tabs = st.tabs(["Overview", "Statistics", "Classes", "Students", "Edit", "Actions"])
+			
+			# Overview tab
+			with detail_tabs[0]:
+				st.subheader(f"📋 {selected_dept['name']} Overview")
+
+				col1, col2, col3, col4 = st.columns(4)
+				with col1:
+					st.metric("Department Code", selected_dept['code'])
+				with col2:
+					st.metric("Short Form", selected_dept['short_form'])
+				with col3:
+					st.metric("Total Classes", selected_dept['number_of_classes'])
+				with col4:
+					st.metric("Status", "✅ Active" if selected_dept['status'] == 'active' else "⚠️ Inactive")
+
+				col1, col2 = st.columns(2)
+				with col1:
+					st.write(f"**Department Head:** {selected_dept['head_name'] or 'Not assigned'}")
+					st.write(f"**Head Email:** {selected_dept['head_email'] or 'Not provided'}")
+				with col2:
+					st.write(f"**Location:** {selected_dept['location'] or 'Not provided'}")
+					st.write(f"**Department Email:** {selected_dept['email'] or 'Not provided'}")
+					st.write(f"**Phone:** {selected_dept['phone'] or 'Not provided'}")
+
+				if selected_dept['description']:
+					st.write(f"**Description:** {selected_dept['description']}")
+			
+			# Statistics tab
+			with detail_tabs[1]:
+				st.subheader("📊 Student Statistics")
+				
+				stats = get_department_statistics(dept_id, cfg=st.session_state.config)
+				
+				col1, col2, col3, col4 = st.columns(4)
+				with col1:
+					st.metric("Total Students", stats.get('total_students', 0))
+				with col2:
+					st.metric("👨 Male", stats.get('male_count', 0))
+				with col3:
+					st.metric("👩 Female", stats.get('female_count', 0))
+				with col4:
+					st.metric("❓ Unknown", stats.get('unknown_count', 0))
+				
+				# Gender distribution chart
+				if stats.get('total_students', 0) > 0:
+					gender_data = {
+						"Male": stats.get('male_count', 0),
+						"Female": stats.get('female_count', 0),
+						"Unknown": stats.get('unknown_count', 0)
+					}
+					st.bar_chart(gender_data)
+			
+			# Classes tab
+			with detail_tabs[2]:
+				st.subheader("📚 Classes in this Department")
+				
+				from src.db import get_classes_by_department
+				classes = get_classes_by_department(dept_id, cfg=st.session_state.config)
+				
+				if classes:
+					for idx, cls in enumerate(classes):
+						with st.expander(f"Class {cls['class_letter']} ({cls['class_code']}) - {cls.get('student_count', 0)} students", expanded=False):
+							col1, col2 = st.columns(2)
+							with col1:
+								st.write(f"**Class Code:** {cls['class_code']}")
+								st.write(f"**Students:** {cls.get('student_count', 0)}/{cls.get('capacity', 50)}")
+							with col2:
+								st.write(f"**Class Advisor:** {cls['class_advisor'] or 'Not assigned'}")
+								st.write(f"**Room Number:** {cls['room_number'] or 'Not assigned'}")
+							
+							# Edit class details
+							with st.form(f"edit_class_form_{cls['id']}"):
+								col1, col2 = st.columns(2)
+								with col1:
+									new_advisor = st.text_input("Class Advisor Name", value=cls['class_advisor'] or "", key=f"advisor_{cls['id']}")
+								with col2:
+									new_room = st.text_input("Room Number", value=cls['room_number'] or "", key=f"room_{cls['id']}")
+								
+								if st.form_submit_button("Update Class", key=f"update_class_{cls['id']}"):
+									from src.db import update_class_advisor, update_class_room
+									if new_advisor:
+										update_class_advisor(cls['id'], new_advisor, cfg=st.session_state.config)
+									if new_room:
+										update_class_room(cls['id'], new_room, cfg=st.session_state.config)
+									st.success("Class updated!")
+									st.rerun()
+				else:
+					st.info("No classes in this department")
+			
+			# Students tab
+			with detail_tabs[3]:
+				st.subheader("👥 Students in this Department")
+				
+				from src.db import get_students_by_department
+				students = get_students_by_department(selected_dept['name'], cfg=st.session_state.config)
+				
+				if students:
+					st_df = pd.DataFrame(students)
+					st.dataframe(st_df, use_container_width=True, hide_index=True)
+					st.info(f"Total: {len(students)} students")
+				else:
+					st.info("No students in this department yet")
+			
+			# Edit tab
+			with detail_tabs[4]:
+				st.subheader("✏️ Edit Department Information")
+				
+				with st.form("edit_department_form"):
+					col1, col2 = st.columns(2)
+					
+					with col1:
+						new_name = st.text_input("Department Name", value=selected_dept['name'])
+						new_code = st.text_input("Department Code", value=selected_dept['code'])
+						new_short_form = st.text_input("Short Form", value=selected_dept['short_form'])
+					
+					with col2:
+						new_head = st.text_input("Department Head", value=selected_dept['head_name'] or "")
+						new_head_email = st.text_input("Head Email", value=selected_dept['head_email'] or "")
+						new_location = st.text_input("Location", value=selected_dept['location'] or "")
+					
+					new_email = st.text_input("Department Email", value=selected_dept['email'] or "")
+					new_phone = st.text_input("Phone", value=selected_dept['phone'] or "")
+					new_description = st.text_area("Description", value=selected_dept['description'] or "", height=80)
+					
+					if st.form_submit_button("Save Changes", type="primary"):
+						update_data = {
+							"name": new_name,
+							"code": new_code,
+							"short_form": new_short_form,
+							"head_name": new_head,
+							"head_email": new_head_email,
+							"location": new_location,
+							"email": new_email,
+							"phone": new_phone,
+							"description": new_description
+						}
+						success, msg = update_department(dept_id, update_data, cfg=st.session_state.config)
+						if success:
+							st.success("✅ Department updated successfully!")
+							st.rerun()
+						else:
+							st.error(f"❌ {msg}")
+			
+			# Actions tab
+			with detail_tabs[5]:
+				st.subheader("⚙️ Actions")
+				
+				col1, col2, col3 = st.columns(3)
+				
+				with col1:
+					if st.button("📥 Export as CSV", use_container_width=True, key="export_dept"):
+						csv_data = export_department_report(dept_id, cfg=st.session_state.config)
+						if csv_data:
+							st.download_button(
+								label="Download Report",
+								data=csv_data,
+								file_name=f"{selected_dept['code']}_report.csv",
+								mime="text/csv"
+							)
+				
+				with col2:
+					st.write("")  # Spacing
+				
+				with col3:
+					if st.button("🗑️ Delete Department", use_container_width=True, key="delete_dept", help="This will mark the department as inactive"):
+						success, msg = delete_department(dept_id, cfg=st.session_state.config)
+						if success:
+							st.success("✅ Department deleted successfully!")
+							st.rerun()
+						else:
+							st.error(f"❌ {msg}")
 
 
 def render_datasets():
