@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any
 
 from ..auth import authenticate_user, register_student, check_username_exists, check_student_id_exists
 from ..config import AppConfig
+from ..db import update_student_verification, update_student_face, update_student_roll_no
 
 
 def show_login_form(cfg: AppConfig) -> Optional[Dict]:
@@ -37,83 +38,274 @@ def show_login_form(cfg: AppConfig) -> Optional[Dict]:
 
 
 def show_registration_form(cfg: AppConfig) -> Optional[Dict]:
-    """Display student registration form and return user data if successful"""
+    """Display student registration form with 3 stages including face capture"""
     st.title("📝 Student Registration")
+    st.markdown("Complete all stages to finish registration")
+    
+    # Progress indicator
+    progress_col1, progress_col2, progress_col3 = st.columns(3)
+    with progress_col1:
+        st.write("#### Stage 1: ID Generation ✓")
+    with progress_col2:
+        st.write("#### Stage 2: Details")
+    with progress_col3:
+        st.write("#### Stage 3: Face")
 
-    with st.form("registration_form"):
-        st.markdown("### Personal Information")
+    # STAGE 1: Generate Student ID (same as before)
+    st.markdown("---")
+    st.markdown("### 📝 Stage 1: Generate Student ID")
+    
+    from ..db import get_all_departments
+    departments = get_all_departments(cfg=cfg)
+    dept_options = [""] + [f"{d['name']} ({d['code']})" for d in departments]
+
+    with st.form("stage1_form"):
         col1, col2 = st.columns(2)
 
         with col1:
-            full_name = st.text_input("Full Name *", key="reg_full_name")
-            email = st.text_input("Email *", key="reg_email")
-            phone = st.text_input("Phone", key="reg_phone")
+            batch_year = st.number_input("Batch Year *", min_value=2000, max_value=2100, value=2024, step=1)
+            selected_dept = st.selectbox("Department *", dept_options, index=0)
 
         with col2:
-            student_id = st.text_input("Student ID *", key="reg_student_id")
-            class_name = st.text_input("Class *", key="reg_class")
-            department = st.text_input("Department", key="reg_department")
+            section_options = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+            section = st.selectbox("Section *", section_options, index=0)
+            student_number = st.number_input("Student Number *", min_value=1, max_value=999, value=1, step=1)
 
-        st.markdown("### Account Information")
-        col3, col4 = st.columns(2)
+        # Auto-generate Student ID
+        auto_student_id = ""
+        auto_class = ""
+        if selected_dept and batch_year:
+            dept_name = selected_dept.split(" (")[0] if " (" in selected_dept else selected_dept
+            dept_info = next((d for d in departments if d['name'] == dept_name), None)
+            if dept_info:
+                dept_id = f"{dept_info['id']:02d}"
+                batch_yy = str(batch_year)[-2:]
+                section_num = str(section_options.index(section) + 1)
+                student_num = f"{student_number:03d}"
+                auto_student_id = f"{batch_yy}{dept_id}{section_num}{student_num}"
+                auto_class = f"{dept_info['code']}-{section}"
 
-        with col3:
-            username = st.text_input("Username *", key="reg_username")
-            password = st.text_input("Password *", type="password", key="reg_password")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.text_input("Auto-Generated Student ID", value=auto_student_id, disabled=True, key="auto_student_id")
+        with col2:
+            st.text_input("Auto-Generated Class", value=auto_class, disabled=True, key="auto_class")
+            
+        # Auto-generate Roll Number (same as Student ID for this system)
+        auto_roll_no = auto_student_id
 
-        with col4:
-            confirm_password = st.text_input("Confirm Password *", type="password", key="reg_confirm_password")
+        stage1_submit = st.form_submit_button("Proceed to Stage 2", use_container_width=True, type="primary")
 
-        # Terms and conditions
-        agree_terms = st.checkbox("I agree to the terms and conditions", key="reg_agree_terms")
-
-        submitted = st.form_submit_button("Register", use_container_width=True, type="primary")
-
-    if submitted:
-        # Validation
-        if not all([full_name, email, student_id, class_name, username, password]):
-            st.error("Please fill in all required fields marked with *.")
-            return None
-
-        if password != confirm_password:
-            st.error("Passwords do not match.")
-            return None
-
-        if len(password) < 6:
-            st.error("Password must be at least 6 characters long.")
-            return None
-
-        if not agree_terms:
-            st.error("Please agree to the terms and conditions.")
-            return None
-
-        # Check if username or student ID already exists
-        if check_username_exists(username, cfg):
-            st.error("Username already exists. Please choose a different username.")
-            return None
-
-        if check_student_id_exists(student_id, cfg):
-            st.error("Student ID already exists. Please contact administrator if this is an error.")
-            return None
-
-        # Attempt registration
-        student_data = {
-            'username': username,
-            'password': password,
-            'full_name': full_name,
-            'email': email,
-            'student_id': student_id,
-            'class_name': class_name,
-            'department': department,
-            'phone': phone
+    # Store stage 1 data in session
+    if stage1_submit and auto_student_id:
+        st.session_state['reg_stage1'] = {
+            'student_id': auto_student_id,
+            'class': auto_class,
+            'roll_no': auto_roll_no,
+            'department': selected_dept.split(" (")[0] if " (" in selected_dept else selected_dept,
+            'batch_year': batch_year
         }
+        st.rerun()
 
-        if register_student(student_data, cfg):
-            st.success("Registration successful! You can now login with your credentials.")
-            return student_data
+    # STAGE 2: Student Details (show if Stage 1 completed)
+    if 'reg_stage1' in st.session_state:
+        st.markdown("---")
+        st.markdown("### 👤 Stage 2: Student Details")
+        
+        stage1_data = st.session_state['reg_stage1']
+
+        with st.form("stage2_form"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                full_name = st.text_input("Full Name *", key="reg_full_name")
+                email = st.text_input("Email *", key="reg_email")
+                phone = st.text_input("Phone", key="reg_phone")
+
+            with col2:
+                gender = st.radio("Gender *", ["Male", "Female"], index=0, key="student_gender")
+                contact_info = st.text_area("Contact Info", height=80, key="reg_contact")
+
+            st.markdown("### Account Information")
+            col3, col4 = st.columns(2)
+
+            with col3:
+                username = st.text_input("Username *", key="reg_username")
+                password = st.text_input("Password *", type="password", key="reg_password")
+
+            with col4:
+                confirm_password = st.text_input("Confirm Password *", type="password", key="reg_confirm_password")
+
+            # Terms and conditions
+            agree_terms = st.checkbox("I agree to the terms and conditions", key="reg_agree_terms")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                stage2_back = st.form_submit_button("← Back to Stage 1", use_container_width=True)
+            with col2:
+                stage2_submit = st.form_submit_button("Proceed to Stage 3", use_container_width=True, type="primary")
+
+        if stage2_back:
+            del st.session_state['reg_stage1']
+            st.rerun()
+
+        if stage2_submit:
+            # Validation
+            if not all([full_name, email, username, password]):
+                st.error("Please fill in all required fields marked with *.")
+                return None
+
+            if password != confirm_password:
+                st.error("Passwords do not match.")
+                return None
+
+            if len(password) < 6:
+                st.error("Password must be at least 6 characters long.")
+                return None
+
+            if not agree_terms:
+                st.error("Please agree to the terms and conditions.")
+                return None
+
+            # Check if username already exists
+            if check_username_exists(username, cfg):
+                st.error("Username already exists. Please choose a different username.")
+                return None
+
+            # Store stage 2 data
+            st.session_state['reg_stage2'] = {
+                'full_name': full_name,
+                'email': email,
+                'phone': phone,
+                'gender': 'M' if gender == 'Male' else 'F',
+                'contact_info': contact_info,
+                'username': username,
+                'password': password
+            }
+            st.rerun()
+
+    # STAGE 3: Face Capture (show if Stage 2 completed)
+    if 'reg_stage2' in st.session_state and 'reg_stage1' in st.session_state:
+        st.markdown("---")
+        st.markdown("### 👤 Stage 3: Face Registration (Biometric Verification)")
+        
+        stage1_data = st.session_state['reg_stage1']
+        stage2_data = st.session_state['reg_stage2']
+        
+        st.info("📸 Capture a clear photo of your face for biometric verification")
+        st.write("Make sure: ✓ Face is centered  |  ✓ Good lighting  |  ✓ No obstructions")
+        
+        # Camera capture
+        captured_face = st.camera_input("📷 Capture your face", key="face_register")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back to Stage 2", use_container_width=True):
+                del st.session_state['reg_stage2']
+                st.rerun()
+
+        # When a camera capture is provided, store bytes in session so user can confirm or retake
+        if captured_face is not None:
+            st.session_state['reg_captured_face'] = captured_face.getvalue()
+
+        if 'reg_captured_face' in st.session_state:
+            # Show preview and Confirm/Retake options
+            st.markdown("**Captured Face (preview):**")
+            try:
+                from PIL import Image
+                import io as _io
+                img = Image.open(_io.BytesIO(st.session_state['reg_captured_face']))
+                st.image(img, width=240)
+            except Exception:
+                # Fallback: attempt to display raw bytes
+                try:
+                    st.image(st.session_state['reg_captured_face'], width=240)
+                except Exception:
+                    pass
+
+            confirm_col, retake_col = st.columns(2)
+            with retake_col:
+                if st.button("Retake Photo", use_container_width=True, key="retake_photo"):
+                    del st.session_state['reg_captured_face']
+                    st.rerun()
+            with confirm_col:
+                if st.button("Confirm Photo & Complete Registration", use_container_width=True, type="primary", key="confirm_photo"):
+                    # Process confirmed photo
+                    with st.spinner("🔍 Processing face..."):
+                        from .face_login_ui import show_face_registration_stage
+                        from ..face_authentication import FaceAuthenticator
+                        import io as _io
+
+                        face_auth = FaceAuthenticator(cfg)
+                        image_bytes = st.session_state['reg_captured_face']
+
+                        success, face_hash, face_image, message = face_auth.capture_face_for_registration(image_bytes)
+
+                        if success:
+                            st.success(message)
+                            # Show thumbnail confirmation (already shown above)
+
+                            # Save face image
+                            face_image_path = ""
+                            if face_image is not None:
+                                face_image_path = face_auth.save_face_image(
+                                    face_image,
+                                    stage1_data['student_id'],
+                                    stage1_data['roll_no']
+                                ) or ""
+
+                            # Create complete student data
+                            student_data = {
+                                'student_id': stage1_data['student_id'],
+                                'roll_no': stage1_data['roll_no'],
+                                'name': stage2_data['full_name'],
+                                'class': stage1_data['class'],
+                                'department': stage1_data['department'],
+                                'gender': stage2_data['gender'],
+                                'email': stage2_data['email'],
+                                'phone': stage2_data['phone'],
+                                'contact_info': stage2_data['contact_info'],
+                                'face_hash': face_hash,
+                                'face_image_path': face_image_path,
+                                'username': stage2_data['username'],
+                                'password': stage2_data['password']
+                            }
+
+                            # Register student with all information
+                            if register_student(student_data, cfg):
+                                # Update face information
+                                from ..db import update_student_face, update_student_roll_no, update_student_verification
+                                update_student_roll_no(stage1_data['student_id'], stage1_data['roll_no'], cfg)
+                                update_student_face(stage1_data['student_id'], face_hash, face_image_path, cfg)
+                                update_student_verification(stage1_data['student_id'], 1, cfg)
+
+                                st.success("🎉 Registration successful!")
+                                st.balloons()
+
+                                # Clear session
+                                if 'reg_stage1' in st.session_state:
+                                    del st.session_state['reg_stage1']
+                                if 'reg_stage2' in st.session_state:
+                                    del st.session_state['reg_stage2']
+                                if 'reg_captured_face' in st.session_state:
+                                    del st.session_state['reg_captured_face']
+
+                                # Return user data
+                                return {
+                                    'username': stage2_data['username'],
+                                    'full_name': stage2_data['full_name'],
+                                    'email': stage2_data['email'],
+                                    'role': 'student'
+                                }
+                            else:
+                                st.error("Registration failed. Please try again or contact administrator.")
+                                return None
+                        else:
+                            st.error(message)
+                            st.info("Please try again with a clearer photo")
+                            return None
         else:
-            st.error("Registration failed. Please try again or contact administrator.")
-            return None
+            st.info("👆 Please capture your face using the camera above")
 
     return None
 

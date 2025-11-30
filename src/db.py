@@ -364,6 +364,34 @@ def get_user(username: str, cfg: AppConfig | None = None) -> Optional[Dict[str, 
 	return dict(row) if row else None
 
 
+def get_student_stats(student_id: str, cfg: AppConfig | None = None) -> Dict[str, Any]:
+	"""Return aggregated verification stats for a student: average score, pass rate, last_event timestamp"""
+	conn = get_conn(cfg)
+	try:
+		row = conn.execute(
+			"SELECT COUNT(*) as total, SUM(CASE WHEN status='PASS' THEN 1 ELSE 0 END) as pass_count, AVG(score) as avg_score, MAX(timestamp) as last_ts FROM events WHERE student_id=?",
+			(student_id,)
+		).fetchone()
+		if not row:
+			return {"total": 0, "pass_count": 0, "avg_score": None, "pass_rate": None, "last_event": None}
+
+		total = row[0] or 0
+		pass_count = row[1] or 0
+		avg_score = float(row[2]) if row[2] is not None else None
+		last_ts = row[3]
+		pass_rate = (pass_count / total) if total > 0 else None
+
+		return {
+			"total": total,
+			"pass_count": pass_count,
+			"avg_score": avg_score,
+			"pass_rate": pass_rate,
+			"last_event": last_ts,
+		}
+	finally:
+		conn.close()
+
+
 def add_user(username: str, password: str, role: str, full_name: str, email: str, assigned_class: str = "", cfg: AppConfig | None = None) -> None:
 	"""Add user"""
 	conn = get_conn(cfg)
@@ -656,4 +684,106 @@ def export_department_report(dept_id: int, cfg: AppConfig | None = None) -> Opti
 		])
 	
 	return output.getvalue()
+
+
+# ==================== FACE AUTHENTICATION FUNCTIONS ====================
+
+def update_student_face(student_id: str, face_hash: str, face_image_path: str = "", cfg: AppConfig | None = None) -> None:
+	"""Store face hash and image path for student"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute(
+				"UPDATE students SET face_hash=?, face_image_path=? WHERE id=?",
+				(face_hash, face_image_path, student_id)
+			)
+	finally:
+		conn.close()
+
+
+def update_student_roll_no(student_id: str, roll_no: str, cfg: AppConfig | None = None) -> None:
+	"""Update student roll number (auto-generated during registration)"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute(
+				"UPDATE students SET roll_no=? WHERE id=?",
+				(roll_no, student_id)
+			)
+	finally:
+		conn.close()
+
+
+def get_student_by_face_hash(face_hash: str, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Retrieve verified student by face hash"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	try:
+		row = conn.execute(
+			"SELECT * FROM students WHERE face_hash=? AND verified=1",
+			(face_hash,)
+		).fetchone()
+		return dict(row) if row else None
+	finally:
+		conn.close()
+
+
+def get_student_by_roll_no(roll_no: str, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
+	"""Retrieve student by roll number"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	try:
+		row = conn.execute(
+			"SELECT * FROM students WHERE roll_no=?",
+			(roll_no,)
+		).fetchone()
+		return dict(row) if row else None
+	finally:
+		conn.close()
+
+
+def get_all_verified_students(cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get all verified students"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	try:
+		rows = conn.execute(
+			"SELECT * FROM students WHERE verified=1 ORDER BY id"
+		).fetchall()
+		return [dict(r) for r in rows]
+	finally:
+		conn.close()
+
+
+def log_face_authentication(student_id: str, roll_no: str, event_id: int, 
+                           cfg: AppConfig | None = None) -> None:
+	"""Log face authentication event"""
+	# Event is already logged via insert_event, this is for additional tracking
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			conn.execute(
+				"""UPDATE events SET label='Face Authentication' 
+				   WHERE id=? AND student_id=?""",
+				(event_id, student_id)
+			)
+	finally:
+		conn.close()
+
+
+def get_face_auth_history(student_id: str, limit: int = 20, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
+	"""Get face authentication history for a student"""
+	conn = get_conn(cfg)
+	conn.row_factory = sqlite3.Row
+	try:
+		rows = conn.execute(
+			"""SELECT * FROM events 
+			   WHERE student_id=? AND label='Face Authentication' 
+			   ORDER BY timestamp DESC LIMIT ?""",
+			(student_id, limit)
+		).fetchall()
+		return [dict(r) for r in rows]
+	finally:
+		conn.close()
+
 

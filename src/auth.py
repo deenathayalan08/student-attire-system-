@@ -54,8 +54,8 @@ def authenticate_user(username: str, password: str, cfg: AppConfig | None = None
 
 
 def register_student(student_data: Dict, cfg: AppConfig | None = None) -> bool:
-    """Register a new student user"""
-    required_fields = ['username', 'password', 'full_name', 'email', 'student_id', 'class_name']
+    """Register a new student user with face biometric data"""
+    required_fields = ['username', 'password', 'full_name', 'email', 'student_id']
     for field in required_fields:
         if not student_data.get(field):
             return False
@@ -75,20 +75,29 @@ def register_student(student_data: Dict, cfg: AppConfig | None = None) -> bool:
                     'student',
                     student_data['full_name'],
                     student_data['email'],
-                    student_data['class_name']
+                    student_data.get('class', '')
                 )
             )
 
-            # Add to students table
+            # Add to students table with face biometric data
             conn.execute(
-                "INSERT INTO students (id, name, class, department, email, phone) VALUES (?,?,?,?,?,?)",
+                """INSERT INTO students 
+                   (id, name, class, department, email, phone, contact_info, gender, 
+                    roll_no, face_hash, face_image_path, verified) 
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     student_data['student_id'],
                     student_data['full_name'],
-                    student_data['class_name'],
+                    student_data.get('class', ''),
                     student_data.get('department', ''),
                     student_data['email'],
-                    student_data.get('phone', '')
+                    student_data.get('phone', ''),
+                    student_data.get('contact_info', ''),
+                    student_data.get('gender', 'U'),
+                    student_data.get('roll_no', student_data['student_id']),
+                    student_data.get('face_hash', ''),
+                    student_data.get('face_image_path', ''),
+                    0  # Initially unverified, set to 1 after face capture
                 )
             )
         return True

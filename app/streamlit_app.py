@@ -132,12 +132,12 @@ def render_home():
 
 	with col1:
 		if st.button("Register (New Student)", use_container_width=True, type="primary"):
-			st.session_state['auth_action'] = 'register'
+			st.session_state['page'] = 'register'
 			st.rerun()
 
 	with col2:
 		if st.button("Login (Existing User)", use_container_width=True, type="secondary"):
-			st.session_state['auth_action'] = 'login'
+			st.session_state['page'] = 'login'
 			st.rerun()
 
 	st.markdown("---")
@@ -253,7 +253,10 @@ def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Di
 
 def render_image_tab():
 	st.subheader("Single Image")
-	student_id = st.text_input("Student ID / RFID (optional)", key="student_id_image")
+	# Pre-fill student id when user is logged in (roll_no or id)
+	_user = st.session_state.get('user') or {}
+	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
+	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_image")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_image")
 	upload = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"], key="upload_image")
 	if upload is not None:
@@ -358,10 +361,37 @@ def render_image_tab():
 		
 		st.caption(f"Logged event #{resp['event_id']}")
 
+		# Action buttons: Accuracy & Report
+		col_a, col_b = st.columns(2)
+		with col_a:
+			if st.button("Accuracy", key="accuracy_image"):
+				from src.db import get_student
+				st.markdown("**Accuracy Details**")
+				st.write(f"Overall Score: {result.get('score', 0):.3f}")
+				st.write(f"Success Score: {result.get('success_score', 0):.3%}")
+				st.write(f"Fail Score: {result.get('fail_score', 0):.3%}")
+				if student_id:
+					student = get_student(student_id, cfg=st.session_state.config)
+					if student:
+						st.markdown("**Student Details**")
+						st.json(student)
+		with col_b:
+			if st.button("Report", key="report_image"):
+				from src.db import get_events_for_student
+				if student_id:
+					events = get_events_for_student(student_id, limit=50, cfg=st.session_state.config)
+					if events:
+						st.subheader("Report: Recent Events")
+						st.dataframe(pd.DataFrame(events))
+				else:
+					st.info("No student ID provided for report")
+
 
 def render_webcam_tab():
 	st.subheader("Webcam")
-	student_id = st.text_input("Student ID / RFID (optional)", key="student_id_webcam")
+	_user = st.session_state.get('user') or {}
+	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
+	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_webcam")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_webcam")
 	st.info("Use the camera to capture a frame.")
 	cam = st.camera_input("Capture a frame", key="cam_webcam")
@@ -419,10 +449,37 @@ def render_webcam_tab():
 		
 		st.caption(f"Logged event #{resp['event_id']}")
 
+		# Action buttons: Accuracy & Report (webcam)
+		col_a, col_b = st.columns(2)
+		with col_a:
+			if st.button("Accuracy", key="accuracy_webcam"):
+				from src.db import get_student
+				st.markdown("**Accuracy Details**")
+				st.write(f"Overall Score: {result.get('score', 0):.3f}")
+				st.write(f"Success Score: {result.get('success_score', 0):.3%}")
+				st.write(f"Fail Score: {result.get('fail_score', 0):.3%}")
+				if student_id:
+					student = get_student(student_id, cfg=st.session_state.config)
+					if student:
+						st.markdown("**Student Details**")
+						st.json(student)
+		with col_b:
+			if st.button("Report", key="report_webcam"):
+				from src.db import get_events_for_student
+				if student_id:
+					events = get_events_for_student(student_id, limit=50, cfg=st.session_state.config)
+					if events:
+						st.subheader("Report: Recent Events")
+						st.dataframe(pd.DataFrame(events))
+				else:
+					st.info("No student ID provided for report")
+
 
 def render_video_tab():
 	st.subheader("Video")
-	student_id = st.text_input("Student ID / RFID (optional)", key="student_id_video")
+	_user = st.session_state.get('user') or {}
+	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
+	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_video")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_video")
 	video = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"], key="upload_video")
 	if video is None:
@@ -552,12 +609,50 @@ def render_admin_tab():
 		students = get_all_students(cfg=st.session_state.config)
 		st.subheader("All Students")
 		if students:
-			df = pd.DataFrame(students)
-			st.dataframe(df)
+			# Enrich students with aggregated verification stats
+			from src.db import get_student_stats
+			rows = []
+			total_avg_score = 0.0
+			total_pass_rate = 0.0
+			verified_count = 0
+			for s in students:
+				stats = get_student_stats(s.get('id'), cfg=st.session_state.config)
+				row = dict(s)
+				row['avg_score'] = stats.get('avg_score')
+				row['pass_rate'] = stats.get('pass_rate')
+				row['last_verified'] = stats.get('last_event')
+				rows.append(row)
+				if stats.get('avg_score') is not None:
+					total_avg_score += stats.get('avg_score', 0.0)
+				if stats.get('pass_rate') is not None:
+					total_pass_rate += stats.get('pass_rate', 0.0)
+				if s.get('verified', 0):
+					verified_count += 1
 			
-			# Verification status
-			verified_count = sum(1 for s in students if s.get('verified', 0))
-			st.info(f"📊 {verified_count}/{len(students)} students verified")
+			# Display aggregate metric cards
+			st.markdown("#### 📊 Class Statistics")
+			metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+			
+			with metric_col1:
+				st.metric("Total Students", len(students), delta=None)
+			
+			with metric_col2:
+				st.metric("Verified", verified_count, delta=f"{verified_count}/{len(students)}")
+			
+			with metric_col3:
+				avg_score = total_avg_score / len(rows) if rows else 0.0
+				st.metric("Average Score", f"{avg_score:.1%}", delta=None)
+			
+			with metric_col4:
+				avg_pass_rate = total_pass_rate / len(rows) if rows else 0.0
+				st.metric("Pass Rate", f"{avg_pass_rate:.1%}", delta=None)
+			
+			st.markdown("---")
+			
+			# Display detailed table
+			st.markdown("#### Student Details")
+			df = pd.DataFrame(rows)
+			st.dataframe(df)
 		else:
 			st.info("No students in database")
 	
@@ -1127,37 +1222,84 @@ def main():
 	init_session_state()
 	init_db()
 
-	# Always show sidebar navigation
+	# Check if user is logged in
+	user = st.session_state.get('user')
+	is_logged_in = user is not None
+	is_admin = user and user.get('role') == 'admin'
+	
+	# Show sidebar navigation
 	st.sidebar.title("Navigation")
-	nav_options = ["Home", "Student Verification", "Admin Dashboard"]
+	
+	# Build navigation options based on login status and role
+	nav_options = ["Home", "Student Verification", "Face Authentication", "Admin Dashboard"]
+	
+	# Add profile only for logged-in users
+	if is_logged_in:
+		nav_options.append("Profile")
+	
 	nav = st.sidebar.radio("Go to", nav_options, index=0)
-	sidebar_settings()
+	
+	# Show settings only for admin users
+	if is_admin:
+		sidebar_settings()
+
+	# If a verification flow was requested after login/registration, show a simple interstitial
+	if st.session_state.get('force_show_verification'):
+		# Prominent interstitial with clearer CTA
+		st.markdown("<div style='display:flex;align-items:center;gap:16px'>\n<h2 style=\"margin:0\">🚦 Verification Ready</h2>\n<p style=\"margin:0;color:#666\">You're logged in. Proceed to verify your attire using the camera.</p>\n</div>", unsafe_allow_html=True)
+		st.write("")
+		colc1, colc2 = st.columns([1, 1])
+		with colc1:
+			if st.button("▶ Start Verification", key="start_verification", help="Open the camera and start verification"):
+				# Clear flag and render verification UI
+				del st.session_state['force_show_verification']
+				render_student_verification()
+				return
+		with colc2:
+			if st.button("✖ Cancel", key="cancel_verification"):
+				del st.session_state['force_show_verification']
+				st.warning("Verification flow canceled.")
+				st.stop()
 
 	# Import auth UI functions
 	from src.ui.auth_ui import show_login_form, show_registration_form
+	from src.ui.face_login_ui import show_face_authentication
 
-	# Handle authentication based on navigation
+	# Handle page routing
+	current_page = st.session_state.get('page', 'home')
+	
+	# Route based on navigation or page state
 	if nav == "Home":
-		if 'user' not in st.session_state or not st.session_state['user']:
-			auth_action = st.session_state.get('auth_action')
-			if auth_action == 'login':
-				user = show_login_form(st.session_state.config)
-				if user:
-					st.session_state['user'] = user
-					st.rerun()
-			elif auth_action == 'register':
-				user = show_registration_form(st.session_state.config)
-				if user:
-					st.session_state['user'] = user
-					st.rerun()
-			else:
-				render_home()
+		if current_page == 'login':
+			# Student login uses face authentication
+			user = show_face_authentication(st.session_state.config)
+			if user:
+				st.session_state['user'] = user
+				# After successful student login, direct them to verification
+				st.session_state['force_show_verification'] = True
+				st.session_state['page'] = 'home'
+				st.rerun()
+		elif current_page == 'register':
+			user = show_registration_form(st.session_state.config)
+			if user:
+				st.session_state['user'] = user
+				st.session_state['page'] = 'home'
+				st.rerun()
 		else:
 			render_home()
+	
+	elif nav == "Face Authentication":
+		# Face authentication doesn't require prior login
+		user = show_face_authentication(st.session_state.config)
+		if user:
+			st.session_state['user'] = user
+			# After face login, show verification interstitial
+			st.session_state['force_show_verification'] = True
+			st.rerun()
+	
 	elif nav == "Admin Dashboard":
 		# Check if user is admin
-		user = st.session_state.get('user')
-		if not user or user.get('role') != 'admin':
+		if not is_admin:
 			st.title("👨‍💼 Admin Login Required")
 			st.warning("🔒 This area requires administrator access.")
 			st.info("Please enter admin credentials to continue.")
@@ -1182,6 +1324,61 @@ def main():
 					st.error("❌ Invalid admin credentials")
 		else:
 			render_admin_tab()
+	
+	elif nav == "Profile":
+		# Show user profile (only accessible if logged in)
+		st.title("👤 My Profile")
+		st.markdown("---")
+		
+		col1, col2 = st.columns(2)
+		with col1:
+			st.write(f"**Full Name:** {user.get('full_name', 'N/A')}")
+			st.write(f"**Email:** {user.get('email', 'N/A')}")
+			st.write(f"**Role:** {user.get('role', 'N/A').upper()}")
+		
+		with col2:
+			if user.get('roll_no'):
+				st.write(f"**Roll Number:** {user.get('roll_no', 'N/A')}")
+			if user.get('department'):
+				st.write(f"**Department:** {user.get('department', 'N/A')}")
+			if user.get('class'):
+				st.write(f"**Class:** {user.get('class', 'N/A')}")
+		
+		if user.get('auth_method') == 'face' and user.get('auth_time'):
+			from datetime import datetime
+			st.info(f"ℹ️ Last Face Authentication: {user.get('auth_time', 'N/A')}")
+		
+		st.markdown("---")
+
+		# Historical accuracy chart and recent events for the logged-in student
+		student_identifier = user.get('roll_no') or user.get('student_id') or user.get('id') or None
+		if student_identifier:
+			from src.db import get_events_for_student
+			events = get_events_for_student(student_identifier, limit=200, cfg=st.session_state.config)
+			if events:
+				import pandas as _pd
+				df_events = _pd.DataFrame(events)
+				# normalize timestamp
+				if 'timestamp' in df_events.columns:
+					try:
+						df_events['timestamp'] = _pd.to_datetime(df_events['timestamp'])
+					except Exception:
+						pass
+				# Show line chart of score over time if available
+				if 'score' in df_events.columns and not df_events['score'].isnull().all():
+					chart_df = df_events.set_index('timestamp')['score'].sort_index()
+					with st.expander("📈 Accuracy History", expanded=False):
+						st.line_chart(chart_df)
+				# Recent events table and download
+				with st.expander("🗂️ Recent Verification Events", expanded=False):
+					st.dataframe(df_events[['timestamp','zone','status','score','label']].sort_values('timestamp', ascending=False))
+					csv_bytes = df_events.to_csv(index=False).encode('utf-8')
+					st.download_button("Download Events CSV", csv_bytes, file_name=f"{student_identifier}_events.csv")
+		if st.button("Logout", use_container_width=True):
+			from src.auth import logout_user
+			logout_user(st.session_state)
+			st.rerun()
+	
 	else:
 		# Student Verification doesn't require authentication
 		render_student_verification()
