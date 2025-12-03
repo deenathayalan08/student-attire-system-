@@ -27,7 +27,9 @@ def send_email(subject: str, body: str, to_addr: str, cfg: AppConfig | None = No
 				s.login(smtp_user, smtp_pass)
 			s.send_message(msg)
 		return True
-	except Exception:
+	except (smtplib.SMTPException, OSError, TimeoutError) as e:
+		import logging
+		logging.getLogger(__name__).error(f"Email send failed: {e}")
 		return False
 
 

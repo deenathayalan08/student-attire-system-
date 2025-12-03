@@ -166,6 +166,7 @@ def init_db(cfg: AppConfig | None = None) -> None:
 		_ensure_unique_index("students", "roll_no", "idx_students_roll_no_unique")
 		_ensure_column("students", "id_card_hash", "id_card_hash TEXT")
 		_ensure_column("students", "face_hash", "face_hash TEXT")
+		_ensure_column("students", "face_image_path", "face_image_path TEXT")
 		
 		# Add new columns for students
 		_ensure_column("students", "department", "department TEXT")
@@ -181,18 +182,28 @@ def init_db(cfg: AppConfig | None = None) -> None:
 
 
 def insert_event(row: Dict[str, Any], cfg: AppConfig | None = None) -> int:
+	from src.validation import sanitize_string
+	
+	# Sanitize string inputs
+	student_id = sanitize_string(str(row.get("student_id", "")), 20) if row.get("student_id") else None
+	zone = sanitize_string(str(row.get("zone", "")), 50)
+	status = sanitize_string(str(row.get("status", "")), 20)
+	label = sanitize_string(str(row.get("label", "")), 50) if row.get("label") else None
+	details = sanitize_string(str(row.get("details", "")), 500) if row.get("details") else None
+	image_path = sanitize_string(str(row.get("image_path", "")), 255) if row.get("image_path") else None
+	
 	conn = get_conn(cfg)
 	with conn:
 		cur = conn.execute(
 			"INSERT INTO events (student_id, zone, status, score, label, details, image_path) VALUES (?,?,?,?,?,?,?)",
 			(
-				row.get("student_id"),
-				row.get("zone"),
-				row.get("status"),
+				student_id,
+				zone,
+				status,
 				row.get("score"),
-				row.get("label"),
-				row.get("details"),
-				row.get("image_path"),
+				label,
+				details,
+				image_path,
 			),
 		)
 		event_id = cur.lastrowid
@@ -223,6 +234,13 @@ def get_setting(key: str, default: Optional[str] = None, cfg: AppConfig | None =
 
 def check_student_exists(student_id: str, cfg: AppConfig | None = None) -> bool:
 	"""Check if a student exists in the database"""
+	if not student_id:
+		return False
+	
+	# Sanitize input
+	from src.validation import sanitize_string
+	student_id = sanitize_string(student_id, 20)
+	
 	conn = get_conn(cfg)
 	row = conn.execute("SELECT id FROM students WHERE id=?", (student_id,)).fetchone()
 	conn.close()
@@ -275,6 +293,12 @@ def log_geofence_event(student_id: str, event_type: str, location: str, latitude
 
 def get_student(student_id: str, cfg: AppConfig | None = None) -> Optional[Dict[str, Any]]:
 	"""Get student by ID"""
+	if not student_id:
+		return None
+	
+	from src.validation import sanitize_string
+	student_id = sanitize_string(student_id, 20)
+	
 	conn = get_conn(cfg)
 	conn.row_factory = sqlite3.Row
 	row = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
@@ -292,23 +316,50 @@ def get_all_students(cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
 
 
 def add_student(student_data: Dict[str, Any], cfg: AppConfig | None = None) -> None:
-	"""Add or update student"""
+	"""Add or update student and create user account automatically"""
 	conn = get_conn(cfg)
-	with conn:
-		conn.execute(
-			"INSERT OR REPLACE INTO students (id, name, class, department, uniform_type, email, phone, contact_info) VALUES (?,?,?,?,?,?,?,?)",
-			(
-				student_data.get("id"),
-				student_data.get("name"),
-				student_data.get("class"),
-				student_data.get("department"),
-				student_data.get("uniform_type"),
-				student_data.get("email"),
-				student_data.get("phone"),
-				student_data.get("contact_info")
+	try:
+		with conn:
+			# Add to students table
+			conn.execute(
+				"INSERT OR REPLACE INTO students (id, name, class, department, uniform_type, email, phone, contact_info, gender) VALUES (?,?,?,?,?,?,?,?,?)",
+				(
+					student_data.get("id"),
+					student_data.get("name"),
+					student_data.get("class"),
+					student_data.get("department"),
+					student_data.get("uniform_type"),
+					student_data.get("email"),
+					student_data.get("phone"),
+					student_data.get("contact_info"),
+					student_data.get("gender", "U")
+				)
 			)
-		)
-	conn.close()
+			
+			# Automatically create user account for login
+			# Check if user already exists
+			existing_user = conn.execute("SELECT username FROM users WHERE username = ?", (student_data.get("id"),)).fetchone()
+			
+			if not existing_user:
+				# Hash password (use student ID as default password)
+				from .auth import hash_password
+				default_password = student_data.get("id")  # Student ID as password
+				hashed_password = hash_password(default_password)
+				
+				# Create user account
+				conn.execute(
+					"INSERT INTO users (username, password, role, full_name, email, assigned_class) VALUES (?,?,?,?,?,?)",
+					(
+						student_data.get("id"),  # Username = Student ID
+						hashed_password,
+						'student',
+						student_data.get("name"),
+						student_data.get("email"),
+						student_data.get("class", '')
+					)
+				)
+	finally:
+		conn.close()
 
 
 def update_student_verification(student_id: str, verified: int, cfg: AppConfig | None = None) -> None:
@@ -323,16 +374,34 @@ def get_compliance_stats(date: Optional[str] = None, cfg: AppConfig | None = Non
 	"""Get daily compliance statistics"""
 	conn = get_conn(cfg)
 	
-	date_filter = f"WHERE DATE(timestamp) = '{date}'" if date else ""
+	# Use parameterized queries to prevent SQL injection
+	if date:
+		date_filter = "WHERE DATE(timestamp) = ?"
+		params = (date,)
+	else:
+		date_filter = ""
+		params = ()
 	
 	# Total events
-	total = conn.execute(f"SELECT COUNT(*) FROM events {date_filter}").fetchone()[0]
+	total = conn.execute(f"SELECT COUNT(*) FROM events {date_filter}", params).fetchone()[0]
 	
 	# Compliant events
-	compliant = conn.execute(f"SELECT COUNT(*) FROM events {date_filter} WHERE status = 'PASS'").fetchone()[0]
+	compliant_query = f"SELECT COUNT(*) FROM events {date_filter}"
+	if date_filter:
+		compliant_query += " AND status = 'PASS'"
+		compliant = conn.execute(compliant_query, params).fetchone()[0]
+	else:
+		compliant_query += " WHERE status = 'PASS'"
+		compliant = conn.execute(compliant_query).fetchone()[0]
 	
 	# Non-compliant events
-	non_compliant = conn.execute(f"SELECT COUNT(*) FROM events {date_filter} WHERE status != 'PASS'").fetchone()[0]
+	non_compliant_query = f"SELECT COUNT(*) FROM events {date_filter}"
+	if date_filter:
+		non_compliant_query += " AND status != 'PASS'"
+		non_compliant = conn.execute(non_compliant_query, params).fetchone()[0]
+	else:
+		non_compliant_query += " WHERE status != 'PASS'"
+		non_compliant = conn.execute(non_compliant_query).fetchone()[0]
 	
 	# Compliance percentage
 	compliance_pct = (compliant / total * 100) if total > 0 else 0
@@ -405,6 +474,15 @@ def add_user(username: str, password: str, role: str, full_name: str, email: str
 
 def get_events_for_student(student_id: str, limit: int = 10, cfg: AppConfig | None = None) -> List[Dict[str, Any]]:
 	"""Get events for a specific student"""
+	if not student_id:
+		return []
+	
+	from src.validation import sanitize_string
+	student_id = sanitize_string(student_id, 20)
+	
+	# Validate limit to prevent excessive queries
+	limit = max(1, min(limit, 1000))
+	
 	conn = get_conn(cfg)
 	conn.row_factory = sqlite3.Row
 	rows = conn.execute("SELECT * FROM events WHERE student_id = ? ORDER BY timestamp DESC LIMIT ?", (student_id, limit)).fetchall()
@@ -416,6 +494,23 @@ def get_events_for_student(student_id: str, limit: int = 10, cfg: AppConfig | No
 
 def add_department(dept_data: Dict[str, Any], cfg: AppConfig | None = None) -> Tuple[bool, int, str]:
 	"""Add a new department and create classes"""
+	from src.validation import validate_department_code, validate_name, sanitize_string
+	import logging
+	logger = logging.getLogger(__name__)
+	
+	# Validate inputs
+	if not validate_name(dept_data.get('name', '')):
+		logger.error("Invalid department name")
+		return False, 0, "Invalid department name format"
+	
+	if not validate_department_code(dept_data.get('code', '')):
+		logger.error("Invalid department code")
+		return False, 0, "Invalid department code format (use 2-10 uppercase letters/numbers)"
+	
+	# Sanitize inputs
+	dept_data['name'] = sanitize_string(dept_data.get('name', ''), 100)
+	dept_data['code'] = sanitize_string(dept_data.get('code', ''), 10).upper()
+	
 	conn = get_conn(cfg)
 	try:
 		with conn:
@@ -456,9 +551,13 @@ def add_department(dept_data: Dict[str, Any], cfg: AppConfig | None = None) -> T
 		return True, dept_id, "Department created successfully"
 	except sqlite3.IntegrityError as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Department creation integrity error: {e}")
 		return False, 0, str(e)
-	except Exception as e:
+	except sqlite3.Error as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Department creation database error: {e}")
 		return False, 0, str(e)
 
 
@@ -562,6 +661,20 @@ def update_department(dept_id: int, dept_data: Dict[str, Any], cfg: AppConfig | 
 	"""Update department information"""
 	conn = get_conn(cfg)
 	try:
+		# Build the values tuple
+		values = (
+			dept_data.get("name"),
+			dept_data.get("code"),
+			dept_data.get("short_form"),
+			dept_data.get("head_name"),
+			dept_data.get("head_email"),
+			dept_data.get("location"),
+			dept_data.get("email"),
+			dept_data.get("phone"),
+			dept_data.get("description"),
+			dept_id
+		)
+		
 		with conn:
 			conn.execute("""
 				UPDATE departments SET
@@ -569,23 +682,13 @@ def update_department(dept_id: int, dept_data: Dict[str, Any], cfg: AppConfig | 
 				head_email = ?, location = ?, email = ?, phone = ?,
 				description = ?, updated_at = CURRENT_TIMESTAMP
 				WHERE id = ?
-			""", (
-				dept_data.get("name"),
-				dept_data.get("code"),
-				dept_data.get("short_form"),
-				dept_data.get("head_name"),
-				dept_data.get("head_email"),
-				dept_data.get("location"),
-				dept_data.get("email"),
-				dept_data.get("phone"),
-				dept_data.get("description"),
-				dept_data.get("department_type", "Academic"),
-				dept_id
-			))
+			""", values)
 		conn.close()
 		return True, "Department updated successfully"
-	except Exception as e:
+	except sqlite3.Error as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Department update error: {e}")
 		return False, str(e)
 
 
@@ -598,8 +701,10 @@ def delete_department(dept_id: int, cfg: AppConfig | None = None) -> Tuple[bool,
 			conn.execute("UPDATE classes SET status = 'inactive' WHERE department_id = ?", (dept_id,))
 		conn.close()
 		return True, "Department deleted successfully"
-	except Exception as e:
+	except sqlite3.Error as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Department deletion error: {e}")
 		return False, str(e)
 
 
@@ -611,8 +716,10 @@ def update_class_advisor(class_id: int, advisor_name: str, cfg: AppConfig | None
 			conn.execute("UPDATE classes SET class_advisor = ? WHERE id = ?", (advisor_name, class_id))
 		conn.close()
 		return True, "Class advisor updated"
-	except Exception as e:
+	except sqlite3.Error as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Class advisor update error: {e}")
 		return False, str(e)
 
 
@@ -624,8 +731,10 @@ def update_class_room(class_id: int, room_number: str, cfg: AppConfig | None = N
 			conn.execute("UPDATE classes SET room_number = ? WHERE id = ?", (room_number, class_id))
 		conn.close()
 		return True, "Room number updated"
-	except Exception as e:
+	except sqlite3.Error as e:
 		conn.close()
+		import logging
+		logging.getLogger(__name__).error(f"Room number update error: {e}")
 		return False, str(e)
 
 
@@ -710,6 +819,38 @@ def update_student_roll_no(student_id: str, roll_no: str, cfg: AppConfig | None 
 				"UPDATE students SET roll_no=? WHERE id=?",
 				(roll_no, student_id)
 			)
+	finally:
+		conn.close()
+
+
+def delete_student(student_id: str, cfg: AppConfig | None = None) -> Tuple[bool, str]:
+	"""Delete a student and all related data"""
+	conn = get_conn(cfg)
+	try:
+		with conn:
+			# Check if student exists
+			student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+			if not student:
+				return False, "Student not found"
+			
+			# Delete from all related tables
+			conn.execute("DELETE FROM events WHERE student_id=?", (student_id,))
+			conn.execute("DELETE FROM unauthorized_access WHERE student_id=?", (student_id,))
+			conn.execute("DELETE FROM access_log WHERE student_id=?", (student_id,))
+			conn.execute("DELETE FROM emergency_alerts WHERE student_id=?", (student_id,))
+			conn.execute("DELETE FROM geofence_events WHERE student_id=?", (student_id,))
+			
+			# Delete from students table
+			conn.execute("DELETE FROM students WHERE id=?", (student_id,))
+			
+			# Delete from users table (exact match only for security)
+			conn.execute("DELETE FROM users WHERE username=?", (student_id,))
+			
+		return True, "Student deleted successfully"
+	except sqlite3.Error as e:
+		import logging
+		logging.getLogger(__name__).error(f"Student deletion error: {e}")
+		return False, str(e)
 	finally:
 		conn.close()
 

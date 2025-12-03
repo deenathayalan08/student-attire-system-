@@ -55,8 +55,23 @@ def import_dataset_images(dataset_path: Path, label: str, cfg: AppConfig, max_im
     for img_path in image_files:
         try:
             # Load image
-            pil_img = Image.open(img_path).convert('RGB')
+            try:
+                pil_img = Image.open(img_path).convert('RGB')
+            except Exception as e:
+                print(f"Error loading image {img_path}: {e}")
+                continue
+            
+            # Validate image dimensions
+            if pil_img.size[0] == 0 or pil_img.size[1] == 0:
+                print(f"Skipping invalid image (zero dimensions): {img_path}")
+                continue
+            
             bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            
+            # Validate converted image
+            if bgr is None or bgr.size == 0:
+                print(f"Skipping corrupted image: {img_path}")
+                continue
 
             # Extract pose and features
             pose = extract_pose(bgr)

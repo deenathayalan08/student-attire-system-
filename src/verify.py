@@ -51,30 +51,30 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 	violations = []
 	profile = (cfg.policy_profile or "regular").lower()
 
-	# Enhanced feature extraction
-	torso_h = float(features.get("torso_mean_h", 90.0))
-	torso_s = float(features.get("torso_mean_s", 50.0))
-	torso_v = float(features.get("torso_mean_v", 60.0))
-	torso_brightness = float(features.get("torso_brightness", 128.0))
-	torso_texture = float(features.get("torso_texture", 0.0))
+	# Enhanced feature extraction with None checks
+	torso_h = float(features.get("torso_mean_h") or 90.0)
+	torso_s = float(features.get("torso_mean_s") or 50.0)
+	torso_v = float(features.get("torso_mean_v") or 60.0)
+	torso_brightness = float(features.get("torso_brightness") or 128.0)
+	torso_texture = float(features.get("torso_texture") or 0.0)
 	
-	legs_v = float(features.get("legs_mean_v", 60.0))
-	legs_brightness = float(features.get("legs_brightness", 128.0))
-	legs_texture = float(features.get("legs_texture", 0.0))
+	legs_v = float(features.get("legs_mean_v") or 60.0)
+	legs_brightness = float(features.get("legs_brightness") or 128.0)
+	legs_texture = float(features.get("legs_texture") or 0.0)
 	
-	feet_v = float(features.get("feet_mean_v", 60.0))
-	feet_brightness = float(features.get("feet_brightness", 128.0))
-	feet_texture = float(features.get("feet_texture", 0.0))
-	feet_h = float(features.get("feet_mean_h", 90.0))
-	feet_s = float(features.get("feet_mean_s", 50.0))
+	feet_v = float(features.get("feet_mean_v") or 60.0)
+	feet_brightness = float(features.get("feet_brightness") or 128.0)
+	feet_texture = float(features.get("feet_texture") or 0.0)
+	feet_h = float(features.get("feet_mean_h") or 90.0)
+	feet_s = float(features.get("feet_mean_s") or 50.0)
 	
 	# Pants length analysis (get this first as it helps determine visibility)
-	pants_length_ratio = float(features.get("pants_length_ratio", 0.0))
-	pants_length_appropriate = float(features.get("pants_length_appropriate", 0.0))
+	pants_length_ratio = float(features.get("pants_length_ratio") or 0.0)
+	pants_length_appropriate = float(features.get("pants_length_appropriate") or 0.0)
 	
 	# Get image dimensions FIRST - this is the most reliable indicator
-	image_height = float(features.get("image_height", 0.0))
-	image_width = float(features.get("image_width", 0.0))
+	image_height = float(features.get("image_height") or 0.0)
+	image_width = float(features.get("image_width") or 0.0)
 	
 	# SIMPLIFIED APPROACH: If image is portrait (height > width), it's ALWAYS a full-body image
 	# Portrait images (height > width) virtually always show full body in student verification
@@ -92,9 +92,9 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 	has_valid_dimensions = image_height > 0 and image_width > 0
 	
 	# Additional signals
-	has_full_body_pose = float(features.get("has_full_body_pose", 0.0)) > 0.5
-	legs_mask_area = float(features.get("legs_mask_area", 0.0))
-	feet_mask_area = float(features.get("feet_mask_area", 0.0))
+	has_full_body_pose = float(features.get("has_full_body_pose") or 0.0) > 0.5
+	legs_mask_area = float(features.get("legs_mask_area") or 0.0)
+	feet_mask_area = float(features.get("feet_mask_area") or 0.0)
 	
 	# CRITICAL FIX: Default to assuming legs and feet are visible UNLESS image is clearly a headshot
 	# For student verification, most images are full-body portrait photos
@@ -138,9 +138,9 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		feet_visible = True
 	
 	# ID Card detection analysis
-	id_card_detected = float(features.get("id_card_detected", 0.0))
-	id_card_confidence = float(features.get("id_card_confidence", 0.0))
-	id_card_area = float(features.get("id_card_area", 0.0))
+	id_card_detected = float(features.get("id_card_detected") or 0.0)
+	id_card_confidence = float(features.get("id_card_confidence") or 0.0)
+	id_card_area = float(features.get("id_card_area") or 0.0)
 	
 	# Enhanced detection logic
 	# Shoes detection (more tolerant): consider present if any of these signals

@@ -43,12 +43,20 @@ except Exception as e:
 
 
 def extract_features_for_image(image_path: Path, bins: int) -> Dict[str, float]:
-    img = cv2.imread(str(image_path))
-    if img is None:
-        raise RuntimeError(f"Failed to read image: {image_path}")
-    pose = extract_pose(img)
-    features = extract_features_from_image(img, pose_landmarks=pose, bins=bins)
-    return features
+    try:
+        img = cv2.imread(str(image_path))
+        if img is None:
+            raise RuntimeError(f"Failed to read image: {image_path}")
+        
+        # Validate image
+        if img.size == 0 or img.shape[0] == 0 or img.shape[1] == 0:
+            raise RuntimeError(f"Invalid image dimensions: {image_path}")
+        
+        pose = extract_pose(img)
+        features = extract_features_from_image(img, pose_landmarks=pose, bins=bins)
+        return features
+    except Exception as e:
+        raise RuntimeError(f"Error processing image {image_path}: {e}")
 
 
 def build_dataframe_from_image_list(image_paths: List[Path], labels: List[str], bins: int) -> pd.DataFrame:
@@ -94,7 +102,14 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if meta_path and meta_path.exists():
         print(f"Loading metadata CSV: {meta_path}")
-        df = pd.read_csv(meta_path)
+        try:
+            df = pd.read_csv(meta_path)
+        except Exception as e:
+            raise RuntimeError(f"Error reading metadata CSV: {e}")
+        
+        if df.empty:
+            raise RuntimeError("Metadata CSV is empty")
+        
         if "label" not in df.columns:
             raise RuntimeError("metadata CSV must contain a 'label' column")
         # Use classifier training helper
@@ -124,15 +139,28 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     labels = []
     if args.labels_csv:
-        mapping = pd.read_csv(args.labels_csv)
+        try:
+            mapping = pd.read_csv(args.labels_csv)
+        except Exception as e:
+            raise RuntimeError(f"Error reading labels CSV: {e}")
+        
+        if mapping.empty:
+            raise RuntimeError("Labels CSV is empty")
+        
         if not {"image", "label"}.issubset(mapping.columns):
             raise RuntimeError("labels CSV must contain 'image' and 'label' columns")
         map_dict = {str(Path(r["image"]).name): r["label"] for _, r in mapping.iterrows()}
         for p in image_paths:
-            lab = map_dict.get(p.name)
+            lab = map_dict.get(p.name, None)
             if lab is None:
-                raise RuntimeError(f"No label found for image {p.name} in labels CSV")
+                print(f"Warning: No label found for image {p.name} in labels CSV, skipping...")
+                continue
             labels.append(str(lab))
+        
+        # Filter image_paths to match labels (remove skipped images)
+        if len(labels) < len(image_paths):
+            print(f"Filtered {len(image_paths) - len(labels)} images without labels")
+            image_paths = [p for p in image_paths if map_dict.get(p.name) is not None]
     elif args.label_from_folder:
         for p in image_paths:
             labels.append(p.parent.name)
@@ -150,7 +178,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     res = clf.fit(X, y, feature_names=feature_cols)
     print("Evaluation results:")
     print(f"  Cross-val accuracy (cv=3): {res.get('cv_accuracy', 0.0):.4f}")
-    print(f"  Num samples: {res.get('num_samples')}")
+    print(f"  Num samples: {res.get('num_samples', 0)}")
+    print(f"  Num classes: {res.get('num_classes', 0)}")
+    print(f"  CV folds: {res.get('cv_folds', 0)}")
 
     if args.save_model:
         clf.save(args.save_model, cfg=cfg)

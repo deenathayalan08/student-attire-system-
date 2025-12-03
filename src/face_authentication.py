@@ -123,7 +123,9 @@ class FaceAuthenticator:
             
             return True, face_hash, face_image, "✅ Face captured successfully!"
             
-        except Exception as e:
+        except (ValueError, IOError, cv2.error) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Face capture error: {e}")
             return False, None, None, f"❌ Error processing face: {str(e)}"
     
     def authenticate_with_face(self, image_data: bytes, stored_face_hash: str) -> Tuple[bool, float, str]:
@@ -175,7 +177,9 @@ class FaceAuthenticator:
             else:
                 return False, confidence, f"❌ Face did not match. Confidence: {confidence:.1%} (threshold: {threshold:.1%})"
             
-        except Exception as e:
+        except (ValueError, IOError, cv2.error) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Face authentication error: {e}")
             return False, 0.0, f"❌ Error during authentication: {str(e)}"
     
     def save_face_image(self, face_image: np.ndarray, student_id: str, roll_no: str) -> str:
@@ -195,8 +199,9 @@ class FaceAuthenticator:
             else:
                 return None
                 
-        except Exception as e:
-            print(f"Error saving face image: {e}")
+        except (IOError, OSError) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error saving face image: {e}")
             return None
     
     def delete_face_image(self, face_image_path: str) -> bool:
@@ -206,6 +211,76 @@ class FaceAuthenticator:
                 Path(face_image_path).unlink()
                 return True
             return False
-        except Exception as e:
-            print(f"Error deleting face image: {e}")
+        except (IOError, OSError) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error deleting face image: {e}")
             return False
+    
+    def find_matching_student(self, image_data: bytes) -> Tuple[Optional[Dict], float, str]:
+        """
+        Search through all verified students to find a face match
+        Returns: (student_dict, confidence, message)
+        """
+        try:
+            # Convert uploaded image to numpy array
+            from PIL import Image
+            pil_image = Image.open(io.BytesIO(image_data))
+            frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
+            # Detect faces
+            faces = self._detect_faces(frame)
+            
+            if len(faces) == 0:
+                return None, 0.0, "❌ No face detected in image"
+            
+            if len(faces) > 1:
+                return None, 0.0, "⚠️ Multiple faces detected. Please ensure only your face is visible"
+            
+            # Get face region
+            face_region = faces[0]
+            
+            # Extract features from captured face
+            face_features = self._extract_face_features(frame, face_region)
+            
+            # Generate hash for current face
+            current_hash = self.generate_face_hash(face_features)
+            
+            # Get all verified students from database
+            from .db import get_all_verified_students
+            verified_students = get_all_verified_students(cfg=self.cfg)
+            
+            if not verified_students:
+                return None, 0.0, "❌ No verified students found in database"
+            
+            # Find best match
+            best_match = None
+            best_confidence = 0.0
+            threshold = getattr(self.cfg, "confidence_threshold", 0.75)
+            
+            for student in verified_students:
+                stored_hash = student.get('face_hash')
+                if not stored_hash:
+                    continue
+                
+                # Calculate similarity
+                # Simple hash-based similarity (in production, use proper face recognition)
+                similarity = 1 - (abs(hash(current_hash) % 10000 - hash(stored_hash) % 10000) / 10000)
+                confidence = max(0.0, min(1.0, similarity))
+                
+                # Keep track of best match
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_match = student
+            
+            # Check if best match meets threshold
+            if best_match and best_confidence >= threshold:
+                return best_match, best_confidence, f"✅ Face matched! Confidence: {best_confidence:.1%}"
+            elif best_match:
+                return None, best_confidence, f"❌ Face match confidence too low: {best_confidence:.1%} (threshold: {threshold:.1%})"
+            else:
+                return None, 0.0, "❌ No matching face found in database"
+            
+        except (ValueError, IOError, cv2.error) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Face matching error: {e}")
+            return None, 0.0, f"❌ Error during face matching: {str(e)}"

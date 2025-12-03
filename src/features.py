@@ -162,8 +162,8 @@ def extract_features_from_image(bgr_image: np.ndarray, pose_landmarks=None, bins
 			features[f"{region}_mask_area"] = float(mask_area_ratio)
 	
 	# Additional global features for better detection
-	features["image_brightness"] = float(np.mean(gray))
-	features["image_contrast"] = float(np.std(gray))
+	features["image_brightness"] = float(np.mean(gray)) if gray.size > 0 else 0.0
+	features["image_contrast"] = float(np.std(gray)) if gray.size > 0 else 0.0
 	features["image_height"] = float(h)
 	features["image_width"] = float(w)
 	
@@ -220,7 +220,8 @@ def extract_features_from_image(bgr_image: np.ndarray, pose_landmarks=None, bins
 	
 	# Edge density (useful for detecting structured clothing vs skin)
 	edges = cv2.Canny(gray, 50, 150)
-	features["edge_density"] = float(np.sum(edges > 0) / (edges.shape[0] * edges.shape[1]))
+	total_edge_pixels = edges.shape[0] * edges.shape[1]
+	features["edge_density"] = float(np.sum(edges > 0) / total_edge_pixels) if total_edge_pixels > 0 else 0.0
 	
 	# ID Card detection
 	try:

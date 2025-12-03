@@ -59,9 +59,10 @@ class AttireClassifier:
 			# Use StratifiedKFold to maintain class proportions in each fold
 			skf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
 			cv = cross_val_score(self.model, X, y, cv=skf)
-		except Exception as e:
+		except (ValueError, TypeError) as e:
 			# Fallback to simple k-fold with reduced folds
-			print(f"StratifiedKFold failed: {e}; using regular k-fold with {cv_folds} folds")
+			import logging
+			logging.getLogger(__name__).warning(f"StratifiedKFold failed: {e}; using regular k-fold with {cv_folds} folds")
 			cv = cross_val_score(self.model, X, y, cv=min(cv_folds, 2))
 		
 		# If still NaN (all values are nan), replace with mean of non-nan or 0.5

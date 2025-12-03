@@ -31,7 +31,7 @@ def main():
     clf = AttireClassifier()
     result = clf.train_from_dataframe(df)
 
-    print(".2%")
+    print(f"CV Accuracy: {result['cv_accuracy']:.2%}")
     print(f"Samples: {result['num_samples']}, Classes: {result['num_classes']}, CV folds: {result['cv_folds']}")
 
     print("Saving model...")

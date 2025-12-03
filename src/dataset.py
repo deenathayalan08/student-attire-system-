@@ -18,7 +18,15 @@ def append_sample_to_dataset(bgr_image, label: str, features: Dict[str, Any], cf
 	ensure_dirs(cfg)
 	image_id = str(uuid.uuid4())
 	image_path = cfg.images_dir / f"{image_id}.jpg"
-	cv2.imwrite(str(image_path), bgr_image)
+	
+	# Validate image before writing
+	if bgr_image is None or bgr_image.size == 0:
+		raise ValueError("Invalid image: image is None or empty")
+	
+	# Write image with error handling
+	success = cv2.imwrite(str(image_path), bgr_image)
+	if not success:
+		raise IOError(f"Failed to write image to {image_path}")
 
 	# Extract only numeric features and maintain consistent column order
 	row = {"image": str(image_path), "label": label}

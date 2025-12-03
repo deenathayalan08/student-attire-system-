@@ -70,7 +70,9 @@ class BatchProcessor:
                 "error": None
             }
             
-        except Exception as e:
+        except (IOError, cv2.error, ValueError) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Image processing error for {image_path}: {e}")
             return {
                 "file": image_path,
                 "status": "ERROR",
@@ -160,7 +162,9 @@ class BatchProcessor:
                 "error": None
             }
             
-        except Exception as e:
+        except (IOError, cv2.error, ValueError) as e:
+            import logging
+            logging.getLogger(__name__).error(f"Video processing error for {video_path}: {e}")
             return {
                 "file": video_path,
                 "status": "ERROR",
@@ -209,7 +213,9 @@ class BatchProcessor:
                 try:
                     result = future.result()
                     results.append(result)
-                except Exception as e:
+                except (IOError, cv2.error, ValueError) as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Batch processing error for {file_path}: {e}")
                     results.append({
                         "file": file_path,
                         "status": "ERROR",

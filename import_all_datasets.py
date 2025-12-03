@@ -41,6 +41,11 @@ def import_dataset_folder(folder_path: str, label: str, cfg: AppConfig, max_samp
             pil_img = cv2.imread(str(img_path))
             if pil_img is None:
                 continue
+            
+            # Validate image dimensions
+            if pil_img.size == 0 or pil_img.shape[0] == 0 or pil_img.shape[1] == 0:
+                print(f"Skipping invalid image: {img_path}")
+                continue
 
             # Convert to RGB for PIL compatibility
             rgb_img = cv2.cvtColor(pil_img, cv2.COLOR_BGR2RGB)
@@ -108,9 +113,15 @@ def main():
 
     # Show final stats
     try:
-        df = pd.read_csv(cfg.meta_csv)
-        print(f"Final dataset: {len(df)} samples")
-        print(f"Labels: {df['label'].value_counts().to_dict()}")
+        if cfg.meta_csv.exists():
+            df = pd.read_csv(cfg.meta_csv)
+            if not df.empty:
+                print(f"Final dataset: {len(df)} samples")
+                print(f"Labels: {df['label'].value_counts().to_dict()}")
+            else:
+                print("Dataset CSV is empty")
+        else:
+            print("No dataset CSV found")
     except Exception as e:
         print(f"Could not load final dataset: {e}")
 

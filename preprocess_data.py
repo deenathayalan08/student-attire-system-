@@ -52,7 +52,16 @@ def preprocess_dataset(cfg: AppConfig, augmentation_factor: int = 3):
         print("No existing dataset found. Run import_datasets.py first.")
         return 0
 
-    df = pd.read_csv(cfg.meta_csv)
+    try:
+        df = pd.read_csv(cfg.meta_csv)
+    except Exception as e:
+        print(f"Error loading dataset CSV: {e}")
+        return 0
+    
+    if df.empty:
+        print("Dataset CSV is empty.")
+        return 0
+    
     print(f"Original dataset: {len(df)} samples")
     print(f"Labels: {df['label'].value_counts().to_dict()}")
 
@@ -67,8 +76,23 @@ def preprocess_dataset(cfg: AppConfig, augmentation_factor: int = 3):
             continue
 
         # Load image
-        pil_img = Image.open(image_path).convert('RGB')
+        try:
+            pil_img = Image.open(image_path).convert('RGB')
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+            continue
+        
+        # Validate image dimensions
+        if pil_img.size[0] == 0 or pil_img.size[1] == 0:
+            print(f"Skipping invalid image (zero dimensions): {image_path}")
+            continue
+        
         bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        
+        # Validate converted image
+        if bgr is None or bgr.size == 0 or bgr.shape[0] == 0 or bgr.shape[1] == 0:
+            print(f"Skipping corrupted image: {image_path}")
+            continue
 
         # Generate augmentations
         augmented_images = augment_image(bgr)

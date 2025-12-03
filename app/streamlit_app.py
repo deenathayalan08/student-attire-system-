@@ -1,6 +1,7 @@
 import io
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -25,7 +26,7 @@ from src.db import (
 	get_all_students, get_compliance_stats, add_student, update_student_verification, add_user,
 	add_department, get_all_departments, get_department_by_id, get_classes_by_department,
 	get_students_by_department, get_department_statistics, update_department, delete_department,
-	search_departments, export_department_report, update_class_advisor, update_class_room
+	search_departments, export_department_report, update_class_advisor, update_class_room, delete_student
 )
 from src.alerts import notify_non_compliance, get_id_card_status_message, get_detailed_id_card_message, notify_id_card_status
 from src.security import check_and_alert_unauthorized_student, check_and_log_entry_time, check_and_log_exit_time, check_and_alert_emergency_violations
@@ -108,14 +109,14 @@ def sidebar_settings() -> None:
 			try:
 				st.session_state.classifier.load(cfg.model_path)
 				st.success("Model loaded")
-			except Exception as e:
+			except (IOError, ValueError) as e:
 				st.error(f"Failed to load model: {e}")
 
 		if st.sidebar.button("Clear session state"):
 			for k in list(st.session_state.keys()):
 				if k not in ["config"]:
 					del st.session_state[k]
-				st.experimental_rerun()
+			st.rerun()
 
 
 def render_home():
@@ -596,11 +597,10 @@ def render_admin_tab():
 	st.markdown("---")
 	
 	# Tabs for different admin functions
-	tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+	tab1, tab2, tab3, tab4, tab5 = st.tabs([
 		"Students", 
 		"Compliance Reports", 
 		"Add Student", 
-		"Add User",
 		"➕ Add Department",
 		"📊 Departments"
 	])
@@ -653,6 +653,70 @@ def render_admin_tab():
 			st.markdown("#### Student Details")
 			df = pd.DataFrame(rows)
 			st.dataframe(df)
+			
+			st.markdown("---")
+			
+			# Delete student section
+			st.markdown("#### 🗑️ Delete Student")
+			st.warning("⚠️ **Warning:** Deleting a student will permanently remove all their data including events, face images, and login credentials.")
+			
+			col1, col2 = st.columns([3, 1])
+			with col1:
+				student_ids = [s['id'] for s in students]
+				student_options = [f"{s['id']} - {s['name']}" for s in students]
+				selected_student = st.selectbox(
+					"Select student to delete",
+					options=range(len(student_options)),
+					format_func=lambda x: student_options[x],
+					key="delete_student_select"
+				)
+			
+			with col2:
+				st.write("")  # Spacing
+				st.write("")  # Spacing
+				if st.button("🗑️ Delete Student", type="secondary", use_container_width=True):
+					student_id = student_ids[selected_student]
+					student_name = students[selected_student]['name']
+					
+					# Confirmation dialog
+					st.session_state['confirm_delete_student'] = student_id
+					st.session_state['confirm_delete_name'] = student_name
+			
+			# Show confirmation dialog if delete was clicked
+			if st.session_state.get('confirm_delete_student'):
+				st.error(f"⚠️ **Confirm Deletion**")
+				st.write(f"Are you sure you want to delete student **{st.session_state.get('confirm_delete_name')}** (ID: {st.session_state.get('confirm_delete_student')})?")
+				st.write("This action cannot be undone!")
+				
+				col1, col2, col3 = st.columns([1, 1, 2])
+				with col1:
+					if st.button("✅ Yes, Delete", type="primary", use_container_width=True):
+						from src.db import delete_student
+						success, message = delete_student(st.session_state['confirm_delete_student'], cfg=st.session_state.config)
+						
+						if success:
+							st.success(f"✅ {message}")
+							# Delete face image file if exists
+							import os
+							face_storage = Path("data/face_storage")
+							for file in face_storage.glob(f"*{st.session_state['confirm_delete_student']}*"):
+								try:
+									os.remove(file)
+								except:
+									pass
+							
+							# Clear confirmation
+							del st.session_state['confirm_delete_student']
+							del st.session_state['confirm_delete_name']
+							st.rerun()
+						else:
+							st.error(f"❌ {message}")
+				
+				with col2:
+					if st.button("❌ Cancel", use_container_width=True):
+						del st.session_state['confirm_delete_student']
+						del st.session_state['confirm_delete_name']
+						st.rerun()
 		else:
 			st.info("No students in database")
 	
@@ -695,18 +759,23 @@ def render_admin_tab():
 				dept_name = selected_dept.split(" (")[0] if " (" in selected_dept else selected_dept
 				dept_info = next((d for d in departments if d['name'] == dept_name), None)
 				if dept_info:
-					dept_id = f"{dept_info['id']:02d}"  # 2-digit department ID
+					dept_code = dept_info['code'].upper()  # Department code (alphabets like CS, EE, ME)
 					batch_yy = str(batch_year)[-2:]  # Last 2 digits of year
-					section_num = str(section_options.index(section) + 1)  # 1=A, 2=B, etc.
+					section_letter = section  # Section letter (A, B, C, etc.)
 					student_num = f"{student_number:03d}"  # 3-digit student number
-					auto_student_id = f"{batch_yy}{dept_id}{section_num}{student_num}"
+					# New format: YY-CODE-SECTION-NNN (e.g., 22-CS-A-001)
+					auto_student_id = f"{batch_yy}{dept_code}{section_letter}{student_num}"
 					auto_class = f"{dept_info['code']}-{section}"
 
 			col1, col2 = st.columns(2)
 			with col1:
 				st.text_input("Auto-Generated Student ID", value=auto_student_id, disabled=True, key="auto_student_id")
+				if auto_student_id:
+					st.caption(f"Format: YY(Year) + CODE(Dept) + SECTION + NNN(Number)")
 			with col2:
 				st.text_input("Auto-Generated Class", value=auto_class, disabled=True, key="auto_class")
+				if auto_class:
+					st.caption(f"Class: {auto_class}")
 
 			generate_id = st.form_submit_button("Generate ID", use_container_width=True, type="secondary")
 
@@ -749,32 +818,28 @@ def render_admin_tab():
 						"contact_info": contact_info.strip() if contact_info else None
 					}, cfg=st.session_state.config)
 					st.success(f"✅ Student added successfully! ID: {auto_student_id}")
-					st.info(f"Class: {auto_class} | Department: {dept_name}")
+					st.info(f"📚 Class: {auto_class} | Department: {dept_name}")
+					
+					# Show login credentials
+					st.markdown("---")
+					st.markdown("### 🔐 Login Credentials Created")
+					col1, col2 = st.columns(2)
+					with col1:
+						st.write(f"**Username:** `{auto_student_id}`")
+						st.write(f"**Password:** `{auto_student_id}`")
+					with col2:
+						st.write(f"**Login Method:** Face Authentication or Username/Password")
+						st.caption("Student can change password after first login")
+					
+					st.warning("⚠️ **Important:** Share these credentials with the student securely.")
 					st.balloons()
 		else:
 			st.info("👆 Please generate a Student ID first in Stage 1 above.")
 	
 	with tab4:
-		st.subheader("Add User (Role-Based Access)")
-		with st.form("add_user_form"):
-			username = st.text_input("Username *")
-			password = st.text_input("Password *", type="password")
-			role = st.selectbox("Role *", ["admin", "teacher", "security_staff"])
-			full_name = st.text_input("Full Name *")
-			email = st.text_input("Email *")
-			assigned_class = st.text_input("Assigned Class (for teachers)")
-			
-			if st.form_submit_button("Add User"):
-				if username and password and role and full_name and email:
-					add_user(username, password, role, full_name, email, assigned_class, cfg=st.session_state.config)
-					st.success("User added successfully!")
-				else:
-					st.error("Please fill all required fields (*)")
-	
-	with tab5:
 		render_add_department_tab()
 	
-	with tab6:
+	with tab5:
 		render_departments_tab()
 
 
@@ -1001,28 +1066,47 @@ def render_departments_tab():
 			with detail_tabs[4]:
 				st.subheader("✏️ Edit Department Information")
 				
+				# Show success message if it exists in session state
+				if st.session_state.get('dept_update_success'):
+					st.success("✅ Changes have been saved successfully!")
+					st.info(f"✓ Department Code: {st.session_state.get('dept_update_code', '')} (used for class names like {st.session_state.get('dept_update_code', '')}-A, {st.session_state.get('dept_update_code', '')}-B)")
+					# Clear the message after displaying
+					del st.session_state['dept_update_success']
+					if 'dept_update_code' in st.session_state:
+						del st.session_state['dept_update_code']
+				
+				st.info("ℹ️ **Note:** Department Code is used for class names (e.g., CS-A, EE-B). Use 2-4 letter abbreviations.")
+				
 				with st.form("edit_department_form"):
 					col1, col2 = st.columns(2)
 					
 					with col1:
 						new_name = st.text_input("Department Name", value=selected_dept['name'])
-						new_code = st.text_input("Department Code", value=selected_dept['code'])
-						new_short_form = st.text_input("Short Form", value=selected_dept['short_form'])
+						new_code = st.text_input("Department Code (Alphabetic) *", value=selected_dept['code'], 
+							help="Used for class names. E.g., CS, EE, ME, BBA")
 					
 					with col2:
 						new_head = st.text_input("Department Head", value=selected_dept['head_name'] or "")
 						new_head_email = st.text_input("Head Email", value=selected_dept['head_email'] or "")
-						new_location = st.text_input("Location", value=selected_dept['location'] or "")
 					
+					new_location = st.text_input("Location", value=selected_dept['location'] or "")
 					new_email = st.text_input("Department Email", value=selected_dept['email'] or "")
 					new_phone = st.text_input("Phone", value=selected_dept['phone'] or "")
 					new_description = st.text_area("Description", value=selected_dept['description'] or "", height=80)
 					
 					if st.form_submit_button("Save Changes", type="primary"):
+						# Validate code is alphabetic
+						if not new_code.strip().replace("-", "").isalpha():
+							st.error("❌ Department Code must contain only letters (e.g., CS, EE, ME)")
+							st.stop()
+						
+						# Normalize code to uppercase
+						normalized_code = new_code.strip().upper()
+						
 						update_data = {
 							"name": new_name,
-							"code": new_code,
-							"short_form": new_short_form,
+							"code": normalized_code,
+							"short_form": normalized_code,  # Keep synchronized with code
 							"head_name": new_head,
 							"head_email": new_head_email,
 							"location": new_location,
@@ -1032,7 +1116,9 @@ def render_departments_tab():
 						}
 						success, msg = update_department(dept_id, update_data, cfg=st.session_state.config)
 						if success:
-							st.success("✅ Department updated successfully!")
+							# Store success message in session state
+							st.session_state['dept_update_success'] = True
+							st.session_state['dept_update_code'] = normalized_code
 							st.rerun()
 						else:
 							st.error(f"❌ {msg}")
@@ -1222,6 +1308,19 @@ def main():
 	init_session_state()
 	init_db()
 
+	# ⚡ CRITICAL: Check for redirect to verification page FIRST (before any other routing)
+	if st.session_state.get('show_verification'):
+		del st.session_state['show_verification']
+		# Clear any login-related flags
+		if 'login_in_progress' in st.session_state:
+			del st.session_state['login_in_progress']
+		if 'login_captured_face' in st.session_state:
+			del st.session_state['login_captured_face']
+		if 'login_cropped_face' in st.session_state:
+			del st.session_state['login_cropped_face']
+		render_student_verification()
+		return
+
 	# Check if user is logged in
 	user = st.session_state.get('user')
 	is_logged_in = user is not None
@@ -1231,11 +1330,15 @@ def main():
 	st.sidebar.title("Navigation")
 	
 	# Build navigation options based on login status and role
-	nav_options = ["Home", "Student Verification", "Face Authentication", "Admin Dashboard"]
-	
-	# Add profile only for logged-in users
-	if is_logged_in:
-		nav_options.append("Profile")
+	if is_logged_in and not is_admin:
+		# Student menu
+		nav_options = ["Home", "My Dashboard", "Face Authentication", "Admin Dashboard", "Profile"]
+	elif is_admin:
+		# Admin menu
+		nav_options = ["Home", "Student Verification", "Face Authentication", "Admin Dashboard", "Profile"]
+	else:
+		# Guest menu (Admin Dashboard always visible for login access)
+		nav_options = ["Home", "Face Authentication", "Admin Dashboard"]
 	
 	nav = st.sidebar.radio("Go to", nav_options, index=0)
 	
@@ -1264,9 +1367,15 @@ def main():
 	# Import auth UI functions
 	from src.ui.auth_ui import show_login_form, show_registration_form
 	from src.ui.face_login_ui import show_face_authentication
+	from src.ui.student_dashboard import show_student_dashboard
 
 	# Handle page routing
 	current_page = st.session_state.get('page', 'home')
+	
+	# Check if redirecting to student dashboard
+	if current_page == 'student_dashboard':
+		show_student_dashboard(st.session_state.config)
+		return
 	
 	# Route based on navigation or page state
 	if nav == "Home":
@@ -1275,16 +1384,12 @@ def main():
 			user = show_face_authentication(st.session_state.config)
 			if user:
 				st.session_state['user'] = user
-				# After successful student login, direct them to verification
-				st.session_state['force_show_verification'] = True
-				st.session_state['page'] = 'home'
+				# Redirect handled in face_login_ui.py
 				st.rerun()
 		elif current_page == 'register':
 			user = show_registration_form(st.session_state.config)
-			if user:
-				st.session_state['user'] = user
-				st.session_state['page'] = 'home'
-				st.rerun()
+			# Registration now redirects to login automatically
+			# No need to set user here
 		else:
 			render_home()
 	
@@ -1293,9 +1398,20 @@ def main():
 		user = show_face_authentication(st.session_state.config)
 		if user:
 			st.session_state['user'] = user
-			# After face login, show verification interstitial
-			st.session_state['force_show_verification'] = True
+			# Redirect handled in face_login_ui.py
 			st.rerun()
+	
+	elif nav == "My Dashboard":
+		# Show student dashboard (requires login)
+		if not is_logged_in:
+			st.warning("🔒 Please login first to access your dashboard")
+			st.info("Use Face Authentication to login")
+		else:
+			show_student_dashboard(st.session_state.config)
+	
+	elif nav == "Student Verification":
+		# Admin/teacher verification interface
+		render_student_verification()
 	
 	elif nav == "Admin Dashboard":
 		# Check if user is admin
