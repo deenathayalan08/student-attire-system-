@@ -143,18 +143,19 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 	id_card_area = float(features.get("id_card_area") or 0.0)
 	
 	# Enhanced detection logic
-	# Shoes detection (more tolerant): consider present if any of these signals
+	# Shoes detection (VERY LENIENT): consider present if any of these signals
 	# Improved: if feet region has texture, it's likely shoes (not bare feet)
 	# Bare feet typically have higher brightness and lower texture
 	shoes_present = (
-		feet_texture > 20 or  # Texture indicates shoes (more reliable)
-		(feet_brightness < 160 and feet_texture > 10) or  # Darker with some texture
-		(feet_v < 160 and feet_texture > 10)  # Low value with texture
+		feet_texture > 10 or  # Any texture indicates shoes (very lenient)
+		feet_brightness < 180 or  # Not extremely bright (bare feet are very bright)
+		feet_v < 180 or  # Not extremely high value
+		feet_mask_area > 0  # Feet region detected
 	)
 	shoes_score = float(np.clip(
 		(feet_texture / 100.0) * 0.5 +  # Texture is most reliable (50% weight)
-		((160 - min(feet_brightness, 160)) / 160.0) * 0.3 +  # Brightness (30% weight)
-		((160 - min(feet_v, 160)) / 160.0) * 0.2,  # Value (20% weight)
+		((180 - min(feet_brightness, 180)) / 180.0) * 0.3 +  # Brightness (30% weight)
+		((180 - min(feet_v, 180)) / 180.0) * 0.2,  # Value (20% weight)
 		0.0, 1.0
 	))
 	
@@ -253,7 +254,7 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		
 		# Footwear check - enhanced for males to check for black shoes
 		require_footwear = cfg.require_footwear_male if gender == "male" else cfg.require_footwear_female
-		require_black_shoes = (gender == "male" and getattr(cfg, "require_black_shoes_male", True))
+		require_black_shoes = (gender == "male" and getattr(cfg, "require_black_shoes_male", False))
 		
 		if require_footwear and feet_visible:
 			if not shoes_present:
@@ -303,23 +304,24 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		torso_contrast = float(features.get("torso_contrast", 0.0))
 		
 		def _looks_like_shirt() -> bool:
-			# Shirt detection: should have structured appearance (texture), moderate saturation
-			# Shirts typically have: texture > 20 (structured fabric), saturation < 120 (not too vibrant)
-			# Should not look like a t-shirt (which might have less texture)
-			# Should have reasonable brightness (not too dark, not too bright)
-			has_structure = torso_texture > 20
-			appropriate_saturation = torso_s < 120  # Shirts are usually less saturated than t-shirts
-			has_clothing_texture = torso_contrast > 10  # Should have some contrast/patterns
-			return has_structure and appropriate_saturation
+			# SIMPLIFIED: Just check if wearing any top (formal or casual)
+			# Focus on presence of clothing, not specific texture/structure
+			# Any shirt/top with reasonable brightness is acceptable
+			has_clothing = torso_brightness > 30  # Not bare skin (which is usually brighter)
+			reasonable_coverage = torso_v > 30  # Has some color/coverage
+			# Very lenient - just check if wearing something on top
+			return has_clothing or reasonable_coverage or torso_texture > 5
 
 		def _looks_like_kurti_dupatta() -> bool:
 			return (torso_brightness > 120) and (torso_s < 140)
 		
-		top_ok = top_appropriate
+		# SIMPLIFIED: Don't check color appropriateness, just check if wearing clothing
+		# top_ok = top_appropriate  # OLD: This checks color!
+		top_ok = True  # NEW: Assume top is OK by default
 		if gender == "male" and getattr(cfg, "require_shirt_for_male", True):
-			top_ok = top_ok and _looks_like_shirt()
+			top_ok = _looks_like_shirt()  # Only check if wearing something, not color
 		elif gender == "female" and getattr(cfg, "require_kurti_dupatta_for_female", True):
-			top_ok = top_ok and _looks_like_kurti_dupatta()
+			top_ok = _looks_like_kurti_dupatta()
 
 		if not top_ok:
 			violations.append({
@@ -336,22 +338,22 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 			})
 		
 		# Check pants length if legs are visible (accept full pants)
-		# Only check if pants are too short (shorts), not if they're full-length
+		# SIMPLIFIED: Only check if pants are VERY clearly shorts (very strict threshold)
 		# If pants_length_ratio is 0.0, it means pose detection couldn't calculate it - don't flag as violation
 		if legs_visible and pants_length_ratio > 0.0:
-			# Use a more lenient threshold - only flag if clearly shorts (ratio < 0.20 instead of 0.25)
-			# This prevents false positives when pants are present but ratio calculation is slightly off
-			# Full-length pants typically have ratio > 0.25, so 0.20 gives more tolerance
-			if pants_length_ratio < 0.20:
+			# VERY lenient threshold - only flag if EXTREMELY short (ratio < 0.15)
+			# This prevents false positives - most pants will pass
+			# Only very obvious shorts will fail
+			if pants_length_ratio < 0.15:
 				violations.append({
 					"item": "Bottom Wear",
 					"required": "Full-length pants (any color for males)",
 					"detected": "Pants appear too short (shorts not allowed)",
 					"score": pants_length_appropriate,
-					"severity": "high",
-					"reason": f"Pants length ratio: {pants_length_ratio:.1%} (< 20% indicates shorts). Full-length pants required."
+					"severity": "medium",  # Reduced severity
+					"reason": f"Pants length ratio: {pants_length_ratio:.1%} (< 15% indicates very short shorts). Full-length pants required."
 				})
-			# If pants_length_ratio >= 0.20, pants are acceptable (no violation)
+			# If pants_length_ratio >= 0.15, pants are acceptable (no violation)
 		elif legs_visible and pants_length_ratio == 0.0:
 			# Pants length couldn't be calculated (pose detection issue), but legs are visible
 			# Assume pants are present if legs are visible with texture - don't flag as violation

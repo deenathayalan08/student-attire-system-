@@ -1037,7 +1037,7 @@ def render_departments_tab():
 								with col2:
 									new_room = st.text_input("Room Number", value=cls['room_number'] or "", key=f"room_{cls['id']}")
 								
-								if st.form_submit_button("Update Class", key=f"update_class_{cls['id']}"):
+								if st.form_submit_button("Update Class"):
 									from src.db import update_class_advisor, update_class_room
 									if new_advisor:
 										update_class_advisor(cls['id'], new_advisor, cfg=st.session_state.config)

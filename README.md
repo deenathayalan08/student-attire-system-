@@ -1,81 +1,123 @@
+# Student Attire Verification System
 
-# Student Attire — Quick Start
+A professional computer vision system for verifying student dress code compliance using face authentication and AI-powered attire detection.
 
-This repository contains a small image classification/verification pipeline and a Streamlit demo for detecting student attire categories. The README below is a concise, beginner-friendly guide to get you up and running.
+## Features
 
-## What this repo contains
+- **Face Authentication** - Biometric login using face recognition
+- **Student Registration** - 4-stage registration with face capture
+- **Attire Verification** - AI-powered dress code compliance checking
+- **Admin Dashboard** - Comprehensive student and compliance management
+- **Department Management** - Organize students by departments and classes
+- **Real-time Analysis** - Image, webcam, and video verification support
 
-- A Streamlit demo: `app/streamlit_app.py`
-- Core library code under `src/` (dataset handling, model, verification, utilities)
-- Datasets are in `datasets/` (some archived into `archive/` if removed)
-- Helpful scripts (evaluators, data mapping, cleanup) in the repo root or `scripts/`
+## Quick Start
 
-## Quick setup (Windows PowerShell)
+### Prerequisites
 
-1. Create and activate a virtual environment (recommended):
+- Python 3.8 or higher
+- Webcam (for face authentication)
+- Windows OS
 
-	python -m venv .venv; .\.venv\Scripts\Activate.ps1
+### Installation
 
-2. Install dependencies:
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-	pip install -r requirements.txt
+2. **Run the application:**
+   ```bash
+   streamlit run app\streamlit_app.py
+   ```
 
-3. Verify the environment (optional):
+   Or simply double-click `RUN_APP.bat`
 
-	python check_setup.py
+3. **Access the app:**
+   Open your browser at `http://localhost:8501`
 
-4. Run the Streamlit demo locally:
+## Usage
 
-	streamlit run app\streamlit_app.py
+### For Students
 
-## Running the evaluator (non-invasive)
+1. **Register** - Complete 4-stage registration:
+   - Generate Student ID
+   - Enter personal details
+   - Set emergency password
+   - Capture face biometric
 
-If you want to evaluate a dataset without changing the main code, use the standalone evaluator created during the project exploration.
+2. **Login** - Use face authentication to access your dashboard
 
-1. Generate mappings for a dataset (if not already present):
+3. **Verify Attire** - Upload photos or use webcam to check dress code compliance
 
-	python scripts\make_mappings.py --dataset "datasets\uniform 1" --out tmp_mappings\uniform1.csv
+### For Administrators
 
-2. Run the evaluator:
+1. **Login** with admin credentials:
+   - Username: `admin`
+   - Password: `admin123`
 
-	python evaluate_dataset.py --mapping tmp_mappings\uniform1.csv --out results\uniform1_accuracy.json
+2. **Manage Students** - View, add, or remove students
 
-Output will include cross-validated accuracy and a small report in `results/`.
+3. **View Reports** - Access compliance statistics and reports
 
-## Where to look next
+4. **Manage Departments** - Organize classes and departments
 
-- `src/model.py` — model training and prediction utilities
-- `src/dataset.py` — dataset parsing, mapping helpers
-- `scripts/` — mapping and cleanup utilities
-- `results/` — evaluation, downsample, and cleanup reports
-- `archive/` — ZIP archives of removed datasets (kept for safety)
+## Dress Code Verification
 
-## Notes and caveats
+The system checks for:
+- ✅ Formal shirt (any color)
+- ✅ Full-length pants (any color)
+- ✅ Closed shoes (any color)
 
-- Large dataset folders were archived and removed when you requested smaller project size; archives are in `archive/`.
-- Some datasets are single-class or heavily imbalanced; cross-validation accuracy may be unreliable for them.
-- Downsampling produced minimal space savings because images were already compressed.
+The system focuses on formal attire detection, not specific colors or poses.
 
-If you want any further cleanup (remove archives, results, or helper scripts) or want the evaluator integrated into the main repo instead of being standalone, tell me which files to modify and I’ll do it.
+## Project Structure
 
----
-Short, friendly guide created per your request — only this README remains in the repo root as the single guide file.
-
-## Backups and removed guides
-
-I archived the previous top-level guide files to `archive/removed_guides/` so the repository root stays clean but nothing was permanently lost.
-
-To restore a specific guide back to the project root (PowerShell):
-
-```powershell
-Copy-Item -Path .\archive\removed_guides\BEGINNER_GUIDE.md -Destination .\ -Force
+```
+studentattire/
+├── app/
+│   └── streamlit_app.py          # Main application
+├── src/
+│   ├── auth.py                    # Authentication logic
+│   ├── db.py                      # Database operations
+│   ├── verify.py                  # Verification logic
+│   ├── features.py                # Feature extraction
+│   ├── face_authentication.py     # Face recognition
+│   └── ui/                        # UI components
+├── data/
+│   ├── attire.db                  # SQLite database
+│   └── face_storage/              # Face images
+├── models/                        # ML models
+├── requirements.txt               # Dependencies
+└── README.md                      # This file
 ```
 
-Or to restore them all:
+## Troubleshooting
 
-```powershell
-Get-ChildItem -Path .\archive\removed_guides -Filter '*.md' | ForEach-Object { Copy-Item -Path $_.FullName -Destination .\ -Force }
+### Camera not working
+- Allow camera permissions in Windows Settings
+- Close other apps using the camera
+- Try a different browser
+
+### "streamlit: command not found"
+```bash
+pip install -r requirements.txt
 ```
 
-If you prefer I permanently remove those backups to free space, tell me and I will delete `archive/removed_guides/` after your confirmation.
+### Port already in use
+```bash
+streamlit run app\streamlit_app.py --server.port 8502
+```
 
+## Documentation
+
+- `HOW_TO_RUN.md` - Detailed setup and usage guide
+- `ALL_FIXES_SUMMARY.md` - Technical fixes and solutions
+
+## License
+
+This project is for educational purposes.
+
+## Support
+
+For issues or questions, refer to the documentation files or check the troubleshooting section above.

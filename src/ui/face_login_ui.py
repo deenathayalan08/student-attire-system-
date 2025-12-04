@@ -172,256 +172,256 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
             st.error(f"Error loading image: {e}")
         
         # Buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 Retake Photo", use_container_width=True):
-                if 'login_captured_face' in st.session_state:
-                    del st.session_state['login_captured_face']
-                if 'login_cropped_face' in st.session_state:
-                    del st.session_state['login_cropped_face']
-                st.rerun()
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            retake_clicked = st.button("🔄 Retake Photo", use_container_width=True)
+        with btn_col2:
+            verify_clicked = st.button("✅ Verify Face", use_container_width=True, type="primary")
         
-        with col2:
-            if st.button("✅ Verify Face", use_container_width=True, type="primary"):
+        # Handle retake button
+        if retake_clicked:
+            if 'login_captured_face' in st.session_state:
+                del st.session_state['login_captured_face']
+            if 'login_cropped_face' in st.session_state:
+                del st.session_state['login_cropped_face']
+            st.rerun()
+        
+        # Handle verify button - OUTSIDE column context
+        if verify_clicked:
+            st.markdown("---")
+            st.subheader("🔍 Face Analysis in Progress...")
+            
+            # Initialize face authenticator
+            face_auth = FaceAuthenticator(cfg)
+            
+            # Use cropped image if available
+            if 'login_cropped_face' in st.session_state:
+                img_byte_arr = io.BytesIO()
+                st.session_state['login_cropped_face'].save(img_byte_arr, format='JPEG')
+                image_bytes = img_byte_arr.getvalue()
+            else:
+                image_bytes = st.session_state['login_captured_face']
+            
+            # Process the captured image with real-time feedback
+            progress_placeholder = st.empty()
+            status_placeholder = st.empty()
+            metrics_placeholder = st.empty()
+            
+            with progress_placeholder.container():
+                progress_bar = st.progress(0)
+            
+            # Process the captured image
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
+            # Step 1: Face Detection (20% progress)
+            status_placeholder.info("📍 Detecting face...")
+            progress_bar.progress(20)
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) == 0:
+                status_placeholder.error("❌ No face detected. Please try again with a clear face image.")
+                return None
+            
+            if len(faces) > 1:
+                status_placeholder.warning("⚠️ Multiple faces detected. Please ensure only your face is visible.")
+                return None
+            
+            x, y, w, h = faces[0]
+            face_area_ratio = (w * h) / (frame.shape[0] * frame.shape[1])
+            
+            # Step 2: Face Quality Assessment (40% progress)
+            status_placeholder.info("✅ Face detected. Assessing quality...")
+            progress_bar.progress(40)
+            
+            face_roi = frame[y:y+h, x:x+w]
+            gray_roi = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+            brightness = np.mean(gray_roi)
+            blur_score = cv2.Laplacian(gray_roi, cv2.CV_64F).var()
+            
+            # Display quality metrics
+            with metrics_placeholder.container():
+                st.markdown("#### 📊 Face Quality Metrics")
+                qm_col1, qm_col2, qm_col3, qm_col4 = st.columns(4)
+                with qm_col1:
+                    st.metric("Face Size", f"{face_area_ratio:.1%}", delta="Good" if 0.05 < face_area_ratio < 0.8 else "Adjust")
+                with qm_col2:
+                    st.metric("Brightness", f"{brightness:.0f}", delta="Optimal" if 50 < brightness < 200 else "Adjust lighting")
+                with qm_col3:
+                    st.metric("Clarity", f"{blur_score:.1f}", delta="Clear" if blur_score > 100 else "Blurry")
+                with qm_col4:
+                    st.metric("Frontal Angle", "Centered", delta="Good")
+            
+            # Step 3: Liveness Check (60% progress)
+            status_placeholder.info("✅ Quality verified. Performing liveness check...")
+            progress_bar.progress(60)
+            
+            # Simple liveness heuristic: check if face has sufficient detail/texture
+            face_edges = cv2.Canny(gray_roi, 100, 200)
+            edge_ratio = np.sum(face_edges > 0) / face_edges.size
+            liveness_score = min(1.0, edge_ratio * 5.0)  # Normalize to 0-1
+            
+            with metrics_placeholder.container():
+                st.markdown("#### 🔐 Liveness & Biometric Analysis")
+                lm_col1, lm_col2, lm_col3 = st.columns(3)
+                with lm_col1:
+                    if liveness_score > 0.6:
+                        st.metric("Liveness", f"{liveness_score:.1%}", delta="✅ Live")
+                    else:
+                        st.metric("Liveness", f"{liveness_score:.1%}", delta="⚠️ Check image")
+                with lm_col2:
+                    st.metric("Eye Detection", "Present" if blur_score > 50 else "Not visible")
+                with lm_col3:
+                    st.metric("Spoofing Risk", "Low" if liveness_score > 0.5 else "Medium")
+            
+            st.success("✅ Face validation completed successfully!")
+            
+            # Automatic face matching against database
+            st.markdown("---")
+            st.subheader("🔍 Searching Database for Face Match...")
+            
+            with st.spinner("Matching your face against registered students..."):
+                # Find matching student automatically
+                student, match_confidence, match_message = face_auth.find_matching_student(image_bytes)
+            
+            # Get threshold early (before any conditional blocks)
+            threshold = getattr(cfg, "confidence_threshold", 0.75)
+            
+            if student:
+                # Face match found!
+                st.success(match_message)
+                
+                # Display student information
                 st.markdown("---")
-                st.subheader("🔍 Face Analysis in Progress...")
+                st.subheader("👤 Student Information")
                 
-                # Initialize face authenticator
-                face_auth = FaceAuthenticator(cfg)
+                # Display student information with login details
+                st.success("✅ Student Verified!" if student.get('verified') == 1 else "⚠️ Student Found")
                 
-                # Use cropped image if available
-                if 'login_cropped_face' in st.session_state:
-                    img_byte_arr = io.BytesIO()
-                    st.session_state['login_cropped_face'].save(img_byte_arr, format='JPEG')
-                    image_bytes = img_byte_arr.getvalue()
-                else:
-                    image_bytes = st.session_state['login_captured_face']
+                # Create columns for organized display
+                info_col1, info_col2 = st.columns(2)
                 
-                # Process the captured image with real-time feedback
-                progress_placeholder = st.empty()
-                status_placeholder = st.empty()
-                metrics_placeholder = st.empty()
+                with info_col1:
+                    st.write("### Personal Details")
+                    st.write(f"**📛 Name:** {student.get('name', 'N/A')}")
+                    st.write(f"**🔢 Student ID:** {student.get('id', 'N/A')}")
+                    st.write(f"**🎓 Roll Number:** {student.get('roll_no', 'N/A')}")
+                    st.write(f"**🏢 Department:** {student.get('department', 'N/A')}")
                 
-                with progress_placeholder.container():
-                    progress_bar = st.progress(0)
+                with info_col2:
+                    st.write("### Academic Details")
+                    st.write(f"**📚 Class:** {student.get('class', 'N/A')}")
+                    st.write(f"**👥 Gender:** {student.get('gender', 'Unknown')}")
+                    st.write(f"**✉️ Email:** {student.get('email', 'N/A')}")
+                    st.write(f"**📱 Phone:** {student.get('phone', 'N/A')}")
                 
-                # Process the captured image
-                pil_image = Image.open(io.BytesIO(image_bytes))
-                frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-                
-                # Step 1: Face Detection (20% progress)
-                status_placeholder.info("📍 Detecting face...")
-                progress_bar.progress(20)
-                
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                face_cascade = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-                )
-                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-                
-                if len(faces) == 0:
-                    status_placeholder.error("❌ No face detected. Please try again with a clear face image.")
-                    return None
-                
-                if len(faces) > 1:
-                    status_placeholder.warning("⚠️ Multiple faces detected. Please ensure only your face is visible.")
-                    return None
-                
-                x, y, w, h = faces[0]
-                face_area_ratio = (w * h) / (frame.shape[0] * frame.shape[1])
-                
-                # Step 2: Face Quality Assessment (40% progress)
-                status_placeholder.info("✅ Face detected. Assessing quality...")
-                progress_bar.progress(40)
-                
-                face_roi = frame[y:y+h, x:x+w]
-                gray_roi = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-                brightness = np.mean(gray_roi)
-                blur_score = cv2.Laplacian(gray_roi, cv2.CV_64F).var()
-                
-                # Display quality metrics
-                with metrics_placeholder.container():
-                    st.markdown("#### 📊 Face Quality Metrics")
-                    qm_col1, qm_col2, qm_col3, qm_col4 = st.columns(4)
-                    with qm_col1:
-                        st.metric("Face Size", f"{face_area_ratio:.1%}", delta="Good" if 0.05 < face_area_ratio < 0.8 else "Adjust")
-                    with qm_col2:
-                        st.metric("Brightness", f"{brightness:.0f}", delta="Optimal" if 50 < brightness < 200 else "Adjust lighting")
-                    with qm_col3:
-                        st.metric("Clarity", f"{blur_score:.1f}", delta="Clear" if blur_score > 100 else "Blurry")
-                    with qm_col4:
-                        st.metric("Frontal Angle", "Centered", delta="Good")
-                
-                # Step 3: Liveness Check (60% progress)
-                status_placeholder.info("✅ Quality verified. Performing liveness check...")
-                progress_bar.progress(60)
-                
-                # Simple liveness heuristic: check if face has sufficient detail/texture
-                face_edges = cv2.Canny(gray_roi, 100, 200)
-                edge_ratio = np.sum(face_edges > 0) / face_edges.size
-                liveness_score = min(1.0, edge_ratio * 5.0)  # Normalize to 0-1
-                
-                with metrics_placeholder.container():
-                    st.markdown("#### 🔐 Liveness & Biometric Analysis")
-                    lm_col1, lm_col2, lm_col3 = st.columns(3)
-                    with lm_col1:
-                        if liveness_score > 0.6:
-                            st.metric("Liveness", f"{liveness_score:.1%}", delta="✅ Live")
-                        else:
-                            st.metric("Liveness", f"{liveness_score:.1%}", delta="⚠️ Check image")
-                    with lm_col2:
-                        st.metric("Eye Detection", "Present" if blur_score > 50 else "Not visible")
-                    with lm_col3:
-                        st.metric("Spoofing Risk", "Low" if liveness_score > 0.5 else "Medium")
-                
-                st.success("✅ Face validation completed successfully!")
-                
-                # Automatic face matching against database
                 st.markdown("---")
-                st.subheader("🔍 Searching Database for Face Match...")
                 
-                with st.spinner("Matching your face against registered students..."):
-                    # Find matching student automatically
-                    student, match_confidence, match_message = face_auth.find_matching_student(image_bytes)
+                # Confidence Score & Matching Details
+                st.write("### 🔐 Authentication Score")
+                # Use the match confidence from face matching
+                auth_col1, auth_col2, auth_col3 = st.columns(3)
+                with auth_col1:
+                    st.metric("Confidence Score", f"{match_confidence:.1%}")
+                with auth_col2:
+                    st.metric("Threshold", f"{threshold:.1%}")
+                with auth_col3:
+                    status = "✅ PASS" if match_confidence >= threshold else "❌ FAIL"
+                    st.metric("Authentication", status)
                 
-                # Get threshold early (before any conditional blocks)
-                threshold = getattr(cfg, "confidence_threshold", 0.75)
-                
-                if student:
-                    # Face match found!
-                    st.success(match_message)
-                    
-                    # Display student information - CENTERED
-                    st.markdown("---")
-                    
-                    # Center the content using columns
-                    _, center_col, _ = st.columns([1, 3, 1])
-                    
-                    with center_col:
-                        st.subheader("👤 Student Information")
-                        
-                        # Display student information with login details
-                        st.success("✅ Student Verified!" if student.get('verified') == 1 else "⚠️ Student Found")
-                        
-                        # Create columns for organized display
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.write("### Personal Details")
-                            st.write(f"**📛 Name:** {student.get('name', 'N/A')}")
-                            st.write(f"**🔢 Student ID:** {student.get('id', 'N/A')}")
-                            st.write(f"**🎓 Roll Number:** {student.get('roll_no', 'N/A')}")
-                            st.write(f"**🏢 Department:** {student.get('department', 'N/A')}")
-                        
-                        with col2:
-                            st.write("### Academic Details")
-                            st.write(f"**📚 Class:** {student.get('class', 'N/A')}")
-                            st.write(f"**👥 Gender:** {student.get('gender', 'Unknown')}")
-                            st.write(f"**✉️ Email:** {student.get('email', 'N/A')}")
-                            st.write(f"**📱 Phone:** {student.get('phone', 'N/A')}")
-                        
-                        st.markdown("---")
-                        
-                        # Confidence Score & Matching Details
-                        st.write("### 🔐 Authentication Score")
-                        # Use the match confidence from face matching
-                        auth_col1, auth_col2, auth_col3 = st.columns(3)
-                        with auth_col1:
-                            st.metric("Confidence Score", f"{match_confidence:.1%}")
-                        with auth_col2:
-                            st.metric("Threshold", f"{threshold:.1%}")
-                        with auth_col3:
-                            status = "✅ PASS" if match_confidence >= threshold else "❌ FAIL"
-                            st.metric("Authentication", status)
-                        
-                        # Visual progress bar for confidence
-                        if match_confidence >= threshold:
-                            st.success(f"✅ Authentication Score: {match_confidence:.1%} (Above threshold)")
-                        else:
-                            st.warning(f"⚠️ Confidence too low: {match_confidence:.1%} (Need {threshold:.1%})")
-                        
-                        st.progress(match_confidence)
-                        
-                        st.markdown("---")
-                        
-                        # Login timestamp information
-                        st.write("### ✅ Authentication Details")
-                        now = datetime.now()
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Login Time", now.strftime("%H:%M:%S"))
-                        with col2:
-                            st.metric("Date", now.strftime("%d-%m-%Y"))
-                        with col3:
-                            st.metric("Day", now.strftime("%A"))
-                        
-                        st.info(f"📍 **Full Timestamp:** {now.strftime('%A, %B %d, %Y at %H:%M:%S')}")
-                        
-                        st.markdown("---")
-                        
-                        # Display captured face
-                        st.write("### 📸 Captured Face")
-                        st.image(pil_image, caption="Your captured face image", use_container_width=True)
-                
-                        st.markdown("---")
-                        
-                        # Login button (only if confidence passes threshold)
-                        if match_confidence >= threshold:
-                            if st.button("✅ Confirm Login", use_container_width=True, type="primary"):
-                                # Set login in progress flag FIRST to prevent camera from showing again
-                                st.session_state['login_in_progress'] = True
-                                
-                                # Log authentication event
-                                event_id = insert_event({
-                                    "student_id": student.get('id'),
-                                    "zone": "Face Authentication",
-                                    "status": "PASS",
-                                    "score": match_confidence,
-                                    "label": "Face Authentication",
-                                    "details": f"Face-based authentication successful. Confidence: {match_confidence:.1%}, Threshold: {threshold:.1%}"
-                                }, cfg=cfg)
-                                
-                                # Create user session
-                                user_data = {
-                                    'username': student.get('id'),
-                                    'role': 'student',
-                                    'full_name': student.get('name'),
-                                    'email': student.get('email'),
-                                    'student_id': student.get('id'),
-                                    'roll_no': student.get('roll_no'),
-                                    'department': student.get('department'),
-                                    'class': student.get('class'),
-                                    'auth_method': 'face',
-                                    'auth_time': now.isoformat(),
-                                    'confidence_score': match_confidence,
-                                    'gender': student.get('gender', 'U')
-                                }
-                                
-                                st.session_state['user'] = user_data
-                                
-                                # Set flag to show verification page
-                                st.session_state['show_verification'] = True
-                                st.session_state['page'] = 'home'  # Reset to home so navigation works
-                                
-                                st.success(f"🎉 Welcome, {student.get('name')}!")
-                                st.info("🔄 Redirecting to attire verification...")
-                                st.balloons()
-                                
-                                # Immediate rerun to redirect (login_in_progress flag will prevent camera from showing)
-                                st.rerun()
-                                
-                                return user_data
-                        else:
-                            # Confidence below threshold
-                            st.error(f"❌ Authentication Failed - Confidence {match_confidence:.1%} below threshold {threshold:.1%}")
-                            st.info("Please try again with a clearer photo and better lighting.")
-                            return None
+                # Visual progress bar for confidence
+                if match_confidence >= threshold:
+                    st.success(f"✅ Authentication Score: {match_confidence:.1%} (Above threshold)")
                 else:
-                    # No student match found
-                    st.error("❌ No matching student found in database")
-                    st.info("Please ensure you are registered or try again with a clearer photo.")
+                    st.warning(f"⚠️ Confidence too low: {match_confidence:.1%} (Need {threshold:.1%})")
+                
+                st.progress(match_confidence)
+                
+                st.markdown("---")
+                
+                # Login timestamp information
+                st.write("### ✅ Authentication Details")
+                now = datetime.now()
+                
+                time_col1, time_col2, time_col3 = st.columns(3)
+                with time_col1:
+                    st.metric("Login Time", now.strftime("%H:%M:%S"))
+                with time_col2:
+                    st.metric("Date", now.strftime("%d-%m-%Y"))
+                with time_col3:
+                    st.metric("Day", now.strftime("%A"))
+                
+                st.info(f"📍 **Full Timestamp:** {now.strftime('%A, %B %d, %Y at %H:%M:%S')}")
+                
+                st.markdown("---")
+                
+                # Display captured face
+                st.write("### 📸 Captured Face")
+                st.image(pil_image, caption="Your captured face image", use_container_width=True)
+        
+                st.markdown("---")
+                
+                # Login button (only if confidence passes threshold)
+                if match_confidence >= threshold:
+                    if st.button("✅ Confirm Login", use_container_width=True, type="primary"):
+                        # Set login in progress flag FIRST to prevent camera from showing again
+                        st.session_state['login_in_progress'] = True
+                        
+                        # Log authentication event
+                        event_id = insert_event({
+                            "student_id": student.get('id'),
+                            "zone": "Face Authentication",
+                            "status": "PASS",
+                            "score": match_confidence,
+                            "label": "Face Authentication",
+                            "details": f"Face-based authentication successful. Confidence: {match_confidence:.1%}, Threshold: {threshold:.1%}"
+                        }, cfg=cfg)
+                        
+                        # Create user session
+                        user_data = {
+                            'username': student.get('id'),
+                            'role': 'student',
+                            'full_name': student.get('name'),
+                            'email': student.get('email'),
+                            'student_id': student.get('id'),
+                            'roll_no': student.get('roll_no'),
+                            'department': student.get('department'),
+                            'class': student.get('class'),
+                            'auth_method': 'face',
+                            'auth_time': now.isoformat(),
+                            'confidence_score': match_confidence,
+                            'gender': student.get('gender', 'U')
+                        }
+                        
+                        st.session_state['user'] = user_data
+                        
+                        # Set flag to show verification page
+                        st.session_state['show_verification'] = True
+                        st.session_state['page'] = 'home'  # Reset to home so navigation works
+                        
+                        st.success(f"🎉 Welcome, {student.get('name')}!")
+                        st.info("🔄 Redirecting to attire verification...")
+                        st.balloons()
+                        
+                        # Immediate rerun to redirect (login_in_progress flag will prevent camera from showing)
+                        st.rerun()
+                        
+                        return user_data
+                else:
+                    # Confidence below threshold
+                    st.error(f"❌ Authentication Failed - Confidence {match_confidence:.1%} below threshold {threshold:.1%}")
+                    st.info("Please try again with a clearer photo and better lighting.")
                     return None
+            else:
+                # No student match found
+                st.error("❌ No matching student found in database")
+                st.info("Please ensure you are registered or try again with a clearer photo.")
+                return None
     
     return None
 
