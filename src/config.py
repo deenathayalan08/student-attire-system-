@@ -18,6 +18,7 @@ class AppConfig:
 
 	# Dataset labeling
 	current_label: str = "compliant"
+	save_frames: bool = False  # Save frames to dataset during verification
 
 	# ID Card detection - DISABLED BY DEFAULT (focus on dress code only)
 	enable_id_card_detection: bool = False

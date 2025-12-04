@@ -98,16 +98,15 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
                     "details": "Student logged in using emergency password credentials"
                 }, cfg=cfg)
                 
-                # Set flag to show verification page
-                st.session_state['show_verification'] = True
-                st.session_state['page'] = 'home'  # Reset to home so navigation works
+                # Redirect to verification page
+                st.session_state['show_verification'] = True  # Legacy flag for backward compatibility
                 
                 st.success(f"✅ Emergency login successful! Welcome, {user_data.get('full_name', 'User')}!")
                 st.info("🔄 Redirecting to attire verification...")
                 st.balloons()
                 
-                # Immediate rerun to redirect
-                st.rerun()
+                # Return user data - main app will handle redirect
+                return user_data
                 
                 return user_data
             else:
@@ -400,17 +399,14 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
                         
                         st.session_state['user'] = user_data
                         
-                        # Set flag to show verification page
+                        # Set legacy flag for backward compatibility
                         st.session_state['show_verification'] = True
-                        st.session_state['page'] = 'home'  # Reset to home so navigation works
                         
                         st.success(f"🎉 Welcome, {student.get('name')}!")
                         st.info("🔄 Redirecting to attire verification...")
                         st.balloons()
                         
-                        # Immediate rerun to redirect (login_in_progress flag will prevent camera from showing)
-                        st.rerun()
-                        
+                        # Return user data - main app will handle redirect
                         return user_data
                 else:
                     # Confidence below threshold

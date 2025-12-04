@@ -413,14 +413,10 @@ def show_registration_form(cfg: AppConfig) -> Optional[Dict]:
                                     if 'camera_permission_granted' in st.session_state:
                                         del st.session_state['camera_permission_granted']
 
-                                    # Redirect to login page
-                                    st.session_state['page'] = 'login'
+                                    # Set flag to redirect to login
+                                    st.session_state['show_verification'] = True  # Legacy flag
                                     st.session_state['registration_complete'] = True
                                     st.info("🔐 Please proceed to login with your face biometric.")
-                                    
-                                    # Show button to go to login
-                                    if st.button("Go to Login", use_container_width=True, type="primary"):
-                                        st.rerun()
                                     
                                     return None
                                 else:
@@ -448,7 +444,7 @@ def show_registration_form(cfg: AppConfig) -> Optional[Dict]:
                                     
                                     with col2:
                                         if st.button("🔐 Go to Login", use_container_width=True, type="primary"):
-                                            st.session_state['page'] = 'login'
+                                            st.session_state['show_verification'] = True  # Legacy flag
                                             st.rerun()
                                     
                                     return None

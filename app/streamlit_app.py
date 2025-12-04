@@ -43,6 +43,58 @@ def init_session_state() -> None:
 		st.session_state.last_train_info = None
 	if "zone" not in st.session_state:
 		st.session_state.zone = "Gate"
+	# Navigation state - single source of truth
+	if "current_page" not in st.session_state:
+		st.session_state.current_page = "home"
+
+
+def navigate_to(page: str) -> None:
+	"""Centralized navigation function - single point of control"""
+	st.session_state.current_page = page
+	# Clean up temporary navigation flags
+	for key in ['show_verification', 'force_show_verification', 'page', 
+	            'login_in_progress', 'login_captured_face', 'login_cropped_face']:
+		if key in st.session_state:
+			del st.session_state[key]
+	st.rerun()
+
+
+def get_current_page() -> str:
+	"""Get current page from session state"""
+	# Support legacy 'page' key for backward compatibility
+	if 'page' in st.session_state and 'current_page' not in st.session_state:
+		return st.session_state['page']
+	return st.session_state.get('current_page', 'home')
+
+
+def is_logged_in() -> bool:
+	"""Check if user is logged in"""
+	return st.session_state.get('user') is not None
+
+
+def is_admin() -> bool:
+	"""Check if current user is admin"""
+	user = st.session_state.get('user')
+	return user and user.get('role') == 'admin'
+
+
+def is_student() -> bool:
+	"""Check if current user is student"""
+	user = st.session_state.get('user')
+	return user and user.get('role') == 'student'
+
+
+def logout_and_redirect() -> None:
+	"""Logout user and redirect to home"""
+	from src.auth import logout_user
+	logout_user(st.session_state)
+	# Clear all navigation state
+	for key in ['current_page', 'page', 'show_verification', 'force_show_verification',
+	            'login_in_progress', 'login_captured_face', 'login_cropped_face']:
+		if key in st.session_state:
+			del st.session_state[key]
+	st.session_state.current_page = 'home'
+	st.rerun()
 
 
 def ensure_config_defaults(cfg: AppConfig) -> AppConfig:
@@ -123,26 +175,51 @@ def render_home():
 	st.title("🏫 Student Attire Verification System")
 	st.markdown("---")
 
-	st.markdown("""
-	### Welcome!
+	# Check if user is already logged in
+	if is_logged_in():
+		user = st.session_state.get('user')
+		st.success(f"✅ Welcome back, {user.get('full_name', 'User')}!")
+		
+		st.markdown("### Quick Actions")
+		col1, col2, col3 = st.columns(3)
+		
+		with col1:
+			if is_student():
+				if st.button("📋 My Dashboard", use_container_width=True, type="primary"):
+					navigate_to("student_dashboard")
+			elif is_admin():
+				if st.button("📊 Admin Dashboard", use_container_width=True, type="primary"):
+					navigate_to("admin_dashboard")
+			else:
+				if st.button("🎓 Verify Attire", use_container_width=True, type="primary"):
+					navigate_to("verification")
+		
+		with col2:
+			if st.button("👤 My Profile", use_container_width=True, key="profile_btn_1"):
+				navigate_to("profile")
+		
+		with col3:
+			if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+				logout_and_redirect()
+	else:
+		st.markdown("""
+		### Welcome!
 
-	Are you a new student or an existing user?
-	""")
+		Are you a new student or an existing user?
+		""")
 
-	col1, col2 = st.columns(2)
+		col1, col2 = st.columns(2)
 
-	with col1:
-		if st.button("Register (New Student)", use_container_width=True, type="primary"):
-			st.session_state['page'] = 'register'
-			st.rerun()
+		with col1:
+			if st.button("📝 Register (New Student)", use_container_width=True, type="primary"):
+				navigate_to('register')
 
-	with col2:
-		if st.button("Login (Existing User)", use_container_width=True, type="secondary"):
-			st.session_state['page'] = 'login'
-			st.rerun()
+		with col2:
+			if st.button("🔐 Login (Existing User)", use_container_width=True, type="primary"):
+				navigate_to('face_auth')
 
-	st.markdown("---")
-	st.caption("Select your option above to proceed.")
+		st.markdown("---")
+		st.caption("Select your option above to proceed.")
 
 
 def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
@@ -1302,202 +1379,209 @@ def render_reports_downloads():
 		st.error(f"Unable to access model file: {e}")
 
 
+def show_sidebar_navigation() -> None:
+	"""Professional sidebar navigation with role-based menu"""
+	st.sidebar.title("🏫 Navigation")
+	
+	user = st.session_state.get('user')
+	current_page = get_current_page()
+	
+	# Show user info if logged in
+	if user:
+		st.sidebar.markdown("---")
+		st.sidebar.markdown(f"**👤 {user.get('full_name', 'User')}**")
+		st.sidebar.caption(f"Role: {user.get('role', 'N/A').title()}")
+		st.sidebar.markdown("---")
+	
+	# Build navigation menu based on role
+	if not user:
+		# Guest menu
+		menu_items = [
+			("🏠 Home", "home"),
+			("🔐 Face Login", "face_auth"),
+			("📝 Register", "register"),
+			("👨‍💼 Admin Login", "admin_login"),
+		]
+	elif is_admin():
+		# Admin menu
+		menu_items = [
+			("🏠 Home", "home"),
+			("🎓 Verification", "verification"),
+			("📊 Admin Dashboard", "admin_dashboard"),
+			("👤 Profile", "profile"),
+		]
+	elif is_student():
+		# Student menu
+		menu_items = [
+			("🏠 Home", "home"),
+			("📋 My Dashboard", "student_dashboard"),
+			("👤 Profile", "profile"),
+		]
+	else:
+		# Default menu
+		menu_items = [
+			("🏠 Home", "home"),
+			("🔐 Face Login", "face_auth"),
+		]
+	
+	# Display navigation buttons
+	for label, page_id in menu_items:
+		button_type = "primary" if current_page == page_id else "secondary"
+		if st.sidebar.button(label, key=f"nav_{page_id}", use_container_width=True, type=button_type):
+			navigate_to(page_id)
+	
+	# Logout button for logged-in users
+	if user:
+		st.sidebar.markdown("---")
+		if st.sidebar.button("🚪 Logout", use_container_width=True, type="secondary"):
+			logout_and_redirect()
+	
+	# Settings for admin
+	if is_admin():
+		sidebar_settings()
+
+
 def main():
 	st.set_page_config(page_title="Attire & Safety Verification", layout="wide")
 	ensure_dirs()
 	init_session_state()
 	init_db()
 
-	# ⚡ CRITICAL: Check for redirect to verification page FIRST (before any other routing)
+	# Handle legacy redirect flags (backward compatibility)
 	if st.session_state.get('show_verification'):
 		del st.session_state['show_verification']
-		# Clear any login-related flags
-		if 'login_in_progress' in st.session_state:
-			del st.session_state['login_in_progress']
-		if 'login_captured_face' in st.session_state:
-			del st.session_state['login_captured_face']
-		if 'login_cropped_face' in st.session_state:
-			del st.session_state['login_cropped_face']
-		render_student_verification()
+		navigate_to('verification')
 		return
-
-	# Check if user is logged in
-	user = st.session_state.get('user')
-	is_logged_in = user is not None
-	is_admin = user and user.get('role') == 'admin'
+	
+	# Sync legacy 'page' state to new 'current_page'
+	if 'page' in st.session_state and st.session_state.get('page') != get_current_page():
+		st.session_state.current_page = st.session_state['page']
+		del st.session_state['page']
 	
 	# Show sidebar navigation
-	st.sidebar.title("Navigation")
+	show_sidebar_navigation()
 	
-	# Build navigation options based on login status and role
-	if is_logged_in and not is_admin:
-		# Student menu
-		nav_options = ["Home", "My Dashboard", "Face Authentication", "Admin Dashboard", "Profile"]
-	elif is_admin:
-		# Admin menu
-		nav_options = ["Home", "Student Verification", "Face Authentication", "Admin Dashboard", "Profile"]
-	else:
-		# Guest menu (Admin Dashboard always visible for login access)
-		nav_options = ["Home", "Face Authentication", "Admin Dashboard"]
-	
-	nav = st.sidebar.radio("Go to", nav_options, index=0)
-	
-	# Show settings only for admin users
-	if is_admin:
-		sidebar_settings()
-
-	# If a verification flow was requested after login/registration, show a simple interstitial
-	if st.session_state.get('force_show_verification'):
-		# Prominent interstitial with clearer CTA
-		st.markdown("<div style='display:flex;align-items:center;gap:16px'>\n<h2 style=\"margin:0\">🚦 Verification Ready</h2>\n<p style=\"margin:0;color:#666\">You're logged in. Proceed to verify your attire using the camera.</p>\n</div>", unsafe_allow_html=True)
-		st.write("")
-		colc1, colc2 = st.columns([1, 1])
-		with colc1:
-			if st.button("▶ Start Verification", key="start_verification", help="Open the camera and start verification"):
-				# Clear flag and render verification UI
-				del st.session_state['force_show_verification']
-				render_student_verification()
-				return
-		with colc2:
-			if st.button("✖ Cancel", key="cancel_verification"):
-				del st.session_state['force_show_verification']
-				st.warning("Verification flow canceled.")
-				st.stop()
-
-	# Import auth UI functions
-	from src.ui.auth_ui import show_login_form, show_registration_form
+	# Import UI functions
+	from src.ui.auth_ui import show_registration_form
 	from src.ui.face_login_ui import show_face_authentication
 	from src.ui.student_dashboard import show_student_dashboard
-
-	# Handle page routing
-	current_page = st.session_state.get('page', 'home')
 	
-	# Check if redirecting to student dashboard
-	if current_page == 'student_dashboard':
-		show_student_dashboard(st.session_state.config)
-		return
+	# Get current page
+	current_page = get_current_page()
 	
-	# Route based on navigation or page state
-	if nav == "Home":
-		if current_page == 'login':
-			# Student login uses face authentication
-			user = show_face_authentication(st.session_state.config)
-			if user:
-				st.session_state['user'] = user
-				# Redirect handled in face_login_ui.py
-				st.rerun()
-		elif current_page == 'register':
-			user = show_registration_form(st.session_state.config)
-			# Registration now redirects to login automatically
-			# No need to set user here
-		else:
-			render_home()
+	# Route to appropriate page
+	if current_page == "home":
+		render_home()
 	
-	elif nav == "Face Authentication":
-		# Face authentication doesn't require prior login
+	elif current_page == "face_auth":
 		user = show_face_authentication(st.session_state.config)
 		if user:
 			st.session_state['user'] = user
-			# Redirect handled in face_login_ui.py
-			st.rerun()
+			# Redirect based on role after successful login
+			if is_admin():
+				navigate_to('admin_dashboard')
+			else:
+				navigate_to('student_dashboard')
 	
-	elif nav == "My Dashboard":
-		# Show student dashboard (requires login)
-		if not is_logged_in:
+	elif current_page == "register":
+		user = show_registration_form(st.session_state.config)
+		# Registration redirects to face_auth automatically
+	
+	elif current_page == "student_dashboard":
+		if not is_logged_in():
 			st.warning("🔒 Please login first to access your dashboard")
-			st.info("Use Face Authentication to login")
+			if st.button("🔐 Go to Login"):
+				navigate_to("face_auth")
 		else:
 			show_student_dashboard(st.session_state.config)
 	
-	elif nav == "Student Verification":
-		# Admin/teacher verification interface
+	elif current_page == "verification":
 		render_student_verification()
 	
-	elif nav == "Admin Dashboard":
-		# Check if user is admin
-		if not is_admin:
-			st.title("👨‍💼 Admin Login Required")
-			st.warning("🔒 This area requires administrator access.")
-			st.info("Please enter admin credentials to continue.")
+	elif current_page == "admin_login":
+		st.title("👨‍💼 Admin Login")
+		st.markdown("---")
+		st.warning("🔒 This area requires administrator access.")
+		st.info("Please enter admin credentials to continue.")
 
-			# Admin login form
-			with st.form("admin_login_form"):
-				admin_username = st.text_input("Username")
-				admin_password = st.text_input("Password", type="password")
-				login_button = st.form_submit_button("Login as Admin")
+		with st.form("admin_login_form"):
+			admin_username = st.text_input("Username")
+			admin_password = st.text_input("Password", type="password")
+			login_button = st.form_submit_button("Login as Admin", use_container_width=True, type="primary")
 
-			if login_button:
-				if admin_username == "admin" and admin_password == "admin123":
-					st.session_state['user'] = {
-						'username': 'admin',
-						'role': 'admin',
-						'full_name': 'System Administrator',
-						'email': 'admin@system.com'
-					}
-					st.success("✅ Admin login successful!")
-					st.rerun()
-				else:
-					st.error("❌ Invalid admin credentials")
+		if login_button:
+			if admin_username == "admin" and admin_password == "admin123":
+				st.session_state['user'] = {
+					'username': 'admin',
+					'role': 'admin',
+					'full_name': 'System Administrator',
+					'email': 'admin@system.com'
+				}
+				st.success("✅ Admin login successful!")
+				navigate_to("admin_dashboard")
+			else:
+				st.error("❌ Invalid admin credentials")
+	
+	elif current_page == "admin_dashboard":
+		if not is_admin():
+			navigate_to("admin_login")
 		else:
 			render_admin_tab()
 	
-	elif nav == "Profile":
-		# Show user profile (only accessible if logged in)
-		st.title("👤 My Profile")
-		st.markdown("---")
-		
-		col1, col2 = st.columns(2)
-		with col1:
-			st.write(f"**Full Name:** {user.get('full_name', 'N/A')}")
-			st.write(f"**Email:** {user.get('email', 'N/A')}")
-			st.write(f"**Role:** {user.get('role', 'N/A').upper()}")
-		
-		with col2:
-			if user.get('roll_no'):
-				st.write(f"**Roll Number:** {user.get('roll_no', 'N/A')}")
-			if user.get('department'):
-				st.write(f"**Department:** {user.get('department', 'N/A')}")
-			if user.get('class'):
-				st.write(f"**Class:** {user.get('class', 'N/A')}")
-		
-		if user.get('auth_method') == 'face' and user.get('auth_time'):
-			from datetime import datetime
-			st.info(f"ℹ️ Last Face Authentication: {user.get('auth_time', 'N/A')}")
-		
-		st.markdown("---")
+	elif current_page == "profile":
+		if not is_logged_in():
+			st.warning("🔒 Please login first to access your profile")
+			if st.button("🔐 Go to Login"):
+				navigate_to("face_auth")
+		else:
+			user = st.session_state.get('user')
+			st.title("👤 My Profile")
+			st.markdown("---")
+			
+			col1, col2 = st.columns(2)
+			with col1:
+				st.write(f"**Full Name:** {user.get('full_name', 'N/A')}")
+				st.write(f"**Email:** {user.get('email', 'N/A')}")
+				st.write(f"**Role:** {user.get('role', 'N/A').upper()}")
+			
+			with col2:
+				if user.get('roll_no'):
+					st.write(f"**Roll Number:** {user.get('roll_no', 'N/A')}")
+				if user.get('department'):
+					st.write(f"**Department:** {user.get('department', 'N/A')}")
+				if user.get('class'):
+					st.write(f"**Class:** {user.get('class', 'N/A')}")
+			
+			if user.get('auth_method') == 'face' and user.get('auth_time'):
+				st.info(f"ℹ️ Last Face Authentication: {user.get('auth_time', 'N/A')}")
+			
+			st.markdown("---")
 
-		# Historical accuracy chart and recent events for the logged-in student
-		student_identifier = user.get('roll_no') or user.get('student_id') or user.get('id') or None
-		if student_identifier:
-			from src.db import get_events_for_student
-			events = get_events_for_student(student_identifier, limit=200, cfg=st.session_state.config)
-			if events:
-				import pandas as _pd
-				df_events = _pd.DataFrame(events)
-				# normalize timestamp
-				if 'timestamp' in df_events.columns:
-					try:
-						df_events['timestamp'] = _pd.to_datetime(df_events['timestamp'])
-					except Exception:
-						pass
-				# Show line chart of score over time if available
-				if 'score' in df_events.columns and not df_events['score'].isnull().all():
-					chart_df = df_events.set_index('timestamp')['score'].sort_index()
-					with st.expander("📈 Accuracy History", expanded=False):
-						st.line_chart(chart_df)
-				# Recent events table and download
-				with st.expander("🗂️ Recent Verification Events", expanded=False):
-					st.dataframe(df_events[['timestamp','zone','status','score','label']].sort_values('timestamp', ascending=False))
-					csv_bytes = df_events.to_csv(index=False).encode('utf-8')
-					st.download_button("Download Events CSV", csv_bytes, file_name=f"{student_identifier}_events.csv")
-		if st.button("Logout", use_container_width=True):
-			from src.auth import logout_user
-			logout_user(st.session_state)
-			st.rerun()
+			# Historical accuracy chart and recent events
+			student_identifier = user.get('roll_no') or user.get('student_id') or user.get('id') or None
+			if student_identifier:
+				from src.db import get_events_for_student
+				events = get_events_for_student(student_identifier, limit=200, cfg=st.session_state.config)
+				if events:
+					import pandas as _pd
+					df_events = _pd.DataFrame(events)
+					if 'timestamp' in df_events.columns:
+						try:
+							df_events['timestamp'] = _pd.to_datetime(df_events['timestamp'])
+						except Exception:
+							pass
+					if 'score' in df_events.columns and not df_events['score'].isnull().all():
+						chart_df = df_events.set_index('timestamp')['score'].sort_index()
+						with st.expander("📈 Accuracy History", expanded=False):
+							st.line_chart(chart_df)
+					with st.expander("🗂️ Recent Verification Events", expanded=False):
+						st.dataframe(df_events[['timestamp','zone','status','score','label']].sort_values('timestamp', ascending=False))
+						csv_bytes = df_events.to_csv(index=False).encode('utf-8')
+						st.download_button("Download Events CSV", csv_bytes, file_name=f"{student_identifier}_events.csv")
 	
 	else:
-		# Student Verification doesn't require authentication
-		render_student_verification()
+		# Default to home
+		render_home()
 
 
 if __name__ == "__main__":
