@@ -146,9 +146,10 @@ def analyze_face_quality(image_bytes: bytes) -> Tuple[bool, str, dict]:
         return False, f"❌ Error: {str(e)}", {}
 
 
-def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
+def show_face_authentication(cfg: AppConfig) -> None:
     """
     Face authentication with cropping, retake, and proper redirect
+    Handles navigation internally after successful login
     """
     st.title("🔐 Face Authentication")
     st.markdown("---")
@@ -156,10 +157,23 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
     # Check if already authenticated
     if 'user' in st.session_state and st.session_state.get('user'):
         st.success(f"✅ Already logged in as {st.session_state['user'].get('full_name', 'User')}")
-        return st.session_state['user']
+        # Redirect to verification if already logged in
+        if st.button("🎓 Go to Verification", type="primary"):
+            st.session_state.current_page = 'verification'
+            st.rerun()
+        return
     
-    # Instructions
-    st.info("💡 **Tip:** Ensure good lighting and position your face clearly")
+    # Quick access to emergency login
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.info("💡 **Tip:** Ensure good lighting and position your face clearly")
+    with col2:
+        if st.button("🆘 Emergency Login", help="Use Student ID + Password instead of face"):
+            if 'login_method_selection' not in st.session_state:
+                st.session_state['login_method_selection'] = "🆘 Emergency Login (Username + Password)"
+            else:
+                st.session_state['login_method_selection'] = "🆘 Emergency Login (Username + Password)"
+            st.rerun()
     
     with st.expander("📋 How to capture a good face photo", expanded=False):
         col1, col2, col3 = st.columns(3)
@@ -176,6 +190,110 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
             st.write("• Hold steady")
             st.write("• Clear image")
     
+    st.markdown("---")
+    
+    # Login method selection
+    login_method = st.radio(
+        "🔐 **Choose Login Method:**",
+        ["📸 Face Authentication", "🆘 Emergency Login (Username + Password)"],
+        index=0,
+        key="login_method_selection"
+    )
+    
+    if login_method == "🆘 Emergency Login (Username + Password)":
+        # Show emergency login form
+        st.markdown("---")
+        st.subheader("🆘 Emergency Login")
+        st.info("💡 Use your Student ID and emergency password set during registration")
+        
+        with st.expander("ℹ️ About Emergency Login", expanded=False):
+            st.markdown("""
+            **When to use Emergency Login:**
+            - Face authentication is not working
+            - Camera is not available
+            - Poor lighting conditions
+            - Face recognition confidence is too low
+            
+            **Your Credentials:**
+            - **Username**: Your Student ID (e.g., 22012008)
+            - **Password**: The emergency password you created during registration
+            """)
+        
+        st.markdown("---")
+        
+        from ..auth import authenticate_user
+        
+        with st.form("emergency_login_form"):
+            username = st.text_input("👤 Student ID / Username", placeholder="Enter your Student ID")
+            password = st.text_input("🔐 Emergency Password", type="password", placeholder="Enter your emergency password")
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                login_button = st.form_submit_button("🔓 Login with Password", use_container_width=True, type="primary")
+            with col2:
+                if st.form_submit_button("🔄 Back to Face Auth", use_container_width=True):
+                    st.rerun()
+        
+        if login_button:
+            if not username or not password:
+                st.error("❌ Please enter both Student ID and password")
+            else:
+                with st.spinner("🔍 Authenticating..."):
+                    user = authenticate_user(username, password, cfg)
+                
+                if user:
+                    # Get student record to create consistent user data
+                    from ..db import get_student
+                    student = get_student(username, cfg=cfg)  # username is the student ID
+                    
+                    if student:
+                        # Create consistent user data structure (same as face auth)
+                        user_data = {
+                            'username': student.get('id'),
+                            'role': 'student',
+                            'full_name': student.get('name'),
+                            'email': student.get('email'),
+                            'student_id': student.get('id'),
+                            'roll_no': student.get('roll_no'),
+                            'department': student.get('department'),
+                            'class': student.get('class'),
+                            'auth_method': 'emergency',
+                            'auth_time': datetime.now().isoformat(),
+                            'gender': student.get('gender', 'U')
+                        }
+                        
+                        st.success(f"✅ Welcome back, {student.get('name', 'User')}!")
+                        
+                        # Set user in session
+                        st.session_state['user'] = user_data
+                    else:
+                        # Fallback to basic user data if student record not found
+                        st.success(f"✅ Welcome back, {user.get('full_name', 'User')}!")
+                        
+                        # Add missing fields to user data
+                        user['student_id'] = user.get('username')  # Use username as student_id
+                        user['id'] = user.get('username')  # Add id field
+                        user['auth_method'] = 'emergency'
+                        user['auth_time'] = datetime.now().isoformat()
+                        
+                        st.session_state['user'] = user
+                    
+                    st.balloons()
+                    st.info("🔄 Redirecting to verification page...")
+                    
+                    # Direct navigation to verification page
+                    st.session_state.current_page = 'verification'
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid Student ID or password")
+                    st.info("💡 **Troubleshooting:**")
+                    st.info("• Make sure you're using your Student ID (not name)")
+                    st.info("• Use the emergency password you set during registration")
+                    st.info("• Contact admin if you forgot your credentials")
+        
+        return  # Exit early for emergency login
+    
+    # Face Authentication UI (only show if face auth is selected)
     st.markdown("---")
     
     # Camera capture
@@ -239,6 +357,7 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
             st.success(message)
         else:
             st.warning(message)
+            st.info("💡 **Having trouble with face quality?** You can use Emergency Login (Student ID + Password) as an alternative.")
         
         # Show metrics
         if metrics.get('face_count', 0) > 0:
@@ -262,25 +381,46 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
         st.markdown("---")
         
         # Action buttons
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("🔄 Retake Photo", use_container_width=True, key="retake_main"):
-                # Clear stored images
-                if 'login_captured_face' in st.session_state:
-                    del st.session_state['login_captured_face']
-                if 'login_cropped_face' in st.session_state:
-                    del st.session_state['login_cropped_face']
-                st.rerun()
-        
-        with col2:
-            if not has_face:
+        if not has_face:
+            # Show 4 buttons when quality is poor
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                if st.button("🔄 Retake Photo", use_container_width=True, key="retake_main"):
+                    # Clear stored images
+                    if 'login_captured_face' in st.session_state:
+                        del st.session_state['login_captured_face']
+                    if 'login_cropped_face' in st.session_state:
+                        del st.session_state['login_cropped_face']
+                    st.rerun()
+            
+            with col2:
                 if st.button("⚠️ Try Anyway", use_container_width=True, key="bypass_quality"):
                     has_face = True
                     st.info("⚠️ Quality check bypassed")
-        
-        with col3:
-            if has_face:
+            
+            with col3:
+                if st.button("🆘 Emergency Login", use_container_width=True, key="emergency_from_quality", type="secondary"):
+                    # Switch to emergency login method
+                    st.session_state['login_method_selection'] = "🆘 Emergency Login (Username + Password)"
+                    st.rerun()
+            
+            with col4:
+                st.button("❌ Quality Failed", use_container_width=True, disabled=True)
+        else:
+            # Show 2 buttons when quality is good
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔄 Retake Photo", use_container_width=True, key="retake_main_good"):
+                    # Clear stored images
+                    if 'login_captured_face' in st.session_state:
+                        del st.session_state['login_captured_face']
+                    if 'login_cropped_face' in st.session_state:
+                        del st.session_state['login_cropped_face']
+                    st.rerun()
+            
+            with col2:
                 if st.button("✅ Proceed", use_container_width=True, type="primary", key="proceed_login"):
                     # Authenticate
                     st.markdown("---")
@@ -360,12 +500,12 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
                                 if key in st.session_state:
                                     del st.session_state[key]
                             
-                            # Set redirect flag
-                            st.session_state['redirect_to_verification'] = True
-                            
                             st.success(f"🎉 Welcome, {student.get('name')}!")
                             st.balloons()
                             st.info("🔄 Redirecting to verification page...")
+                            
+                            # Direct navigation to verification page
+                            st.session_state.current_page = 'verification'
                             
                             # Force rerun to trigger redirect
                             st.rerun()
@@ -375,11 +515,16 @@ def show_face_authentication(cfg: AppConfig) -> Optional[Dict]:
                         st.info("• You haven't registered yet - Please register first")
                         st.info("• Your face wasn't captured during registration")
                         st.info("• Try with better lighting and clearer photo")
-                        st.info("• Use Emergency Login (username + password) as alternative")
-            else:
-                st.button("❌ Quality Failed", use_container_width=True, disabled=True)
-    
-    return None
+                        
+                        st.markdown("---")
+                        st.markdown("### 🆘 Alternative Login Method")
+                        st.info("If face authentication continues to fail, you can use emergency login:")
+                        
+                        if st.button("🆘 Switch to Emergency Login", use_container_width=True, type="secondary"):
+                            # Clear the radio button selection to force emergency login
+                            if 'login_method_selection' in st.session_state:
+                                st.session_state['login_method_selection'] = "🆘 Emergency Login (Username + Password)"
+                            st.rerun()
 
 
 def show_face_registration_stage(cfg: AppConfig, student_id: str, auto_class: str) -> Tuple[bool, str, str]:

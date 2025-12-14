@@ -1566,16 +1566,9 @@ def main():
 			navigate_to('verification')
 			return
 		
-		user = show_face_authentication(st.session_state.config)
-		if user:
-			st.session_state['user'] = user
-			# Redirect based on role after successful login
-			if is_admin():
-				navigate_to('admin_dashboard')
-			elif is_student():
-				navigate_to('verification')
-			else:
-				navigate_to('student_dashboard')
+		# Show face authentication UI
+		# The UI handles its own navigation after successful login
+		show_face_authentication(st.session_state.config)
 	
 	elif current_page == "register":
 		user = show_registration_form(st.session_state.config)

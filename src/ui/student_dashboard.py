@@ -17,27 +17,150 @@ def show_student_dashboard(cfg: AppConfig) -> None:
     """Display student dashboard with attire verification"""
     user = st.session_state.get('user')
     if not user:
-        st.error("Please login first")
+        st.error("❌ Please login first to access your dashboard")
+        st.info("💡 You need to be logged in to view your student dashboard")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔐 Go to Login", use_container_width=True, type="primary"):
+                st.session_state.current_page = 'face_auth'
+                st.rerun()
+        with col2:
+            if st.button("🏠 Go to Home", use_container_width=True):
+                st.session_state.current_page = 'home'
+                st.rerun()
         return
     
-    student_id = user.get('student_id') or user.get('id')
+    # Try multiple ways to get student ID
+    student_id = (
+        user.get('student_id') or 
+        user.get('id') or 
+        user.get('username') or 
+        user.get('roll_no')
+    )
+    
+    # Debug: Show what we're working with
+    st.info(f"🔍 **Debug:** Looking for student with ID: `{student_id}`")
+    st.info(f"📋 **User data keys:** {list(user.keys())}")
+    
+    if not student_id:
+        st.error("❌ Unable to identify student. Please login again.")
+        st.error("🔍 **Debug:** No student ID found in user data")
+        
+        # Show all user data for debugging
+        with st.expander("🔧 User Data Debug", expanded=True):
+            st.json(user)
+        
+        if st.button("🔐 Go to Login"):
+            st.session_state.current_page = 'face_auth'
+            st.rerun()
+        return
+    
     student = get_student(student_id, cfg=cfg)
     if not student:
-        st.error("Student record not found")
-        return
+        st.error(f"❌ Student record not found for ID: {student_id}")
+        
+        # Try alternative lookups
+        from ..db import get_student_by_roll_no
+        if user.get('roll_no'):
+            student = get_student_by_roll_no(user.get('roll_no'), cfg=cfg)
+            if student:
+                st.success("✅ Found student record using roll number!")
+            else:
+                st.warning("⚠️ Also tried roll number lookup - no record found")
+        
+        if not student:
+            st.info("💡 **Possible solutions:**")
+            st.info("• Make sure you completed registration properly")
+            st.info("• Contact admin if your record is missing")
+            st.info("• Try logging in again")
+            
+            # Show debug info to help troubleshoot
+            with st.expander("🔧 Debug Information", expanded=True):
+                st.write(f"**Searched for Student ID:** `{student_id}`")
+                st.write("**Available user data fields:**")
+                for key, value in user.items():
+                    if key != 'password':
+                        st.write(f"- {key}: `{value}`")
+                
+                # Test database connection
+                st.write("**Database Test:**")
+                try:
+                    from ..db import get_all_students
+                    all_students = get_all_students(cfg=cfg)
+                    st.write(f"- Total students in database: {len(all_students)}")
+                    if all_students:
+                        st.write("- Sample student IDs in database:")
+                        for i, s in enumerate(all_students[:5]):  # Show first 5
+                            st.write(f"  • {s.get('id', 'No ID')} - {s.get('name', 'No Name')}")
+                        if len(all_students) > 5:
+                            st.write(f"  ... and {len(all_students) - 5} more")
+                except Exception as e:
+                    st.write(f"- Database error: {e}")
+                
+                # Check if student exists with different ID format
+                st.write("**Alternative ID Search:**")
+                possible_ids = [
+                    user.get('student_id'),
+                    user.get('id'), 
+                    user.get('username'),
+                    user.get('roll_no'),
+                    str(user.get('student_id', '')).strip(),
+                    str(user.get('username', '')).strip()
+                ]
+                for pid in possible_ids:
+                    if pid and pid != student_id:
+                        try:
+                            test_student = get_student(str(pid), cfg=cfg)
+                            if test_student:
+                                st.success(f"✅ Found student with ID: `{pid}`")
+                                break
+                            else:
+                                st.write(f"- Tried ID `{pid}`: Not found")
+                        except Exception as e:
+                            st.write(f"- Error testing ID `{pid}`: {e}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔐 Try Login Again", use_container_width=True):
+                    st.session_state.current_page = 'face_auth'
+                    st.rerun()
+            with col2:
+                if st.button("📝 Register Again", use_container_width=True):
+                    st.session_state.current_page = 'register'
+                    st.rerun()
+            return
     
     st.title("Student Dashboard")
     st.markdown(f"### Welcome, {student.get('name', 'Student')}!")
     
+    # Debug info (can be removed later)
+    with st.expander("🔧 Debug Info (for troubleshooting)", expanded=False):
+        st.write("**User Session Data:**")
+        st.json({k: v for k, v in user.items() if k != 'password'})
+        st.write("**Student Record Data:**")
+        st.json({k: v for k, v in student.items() if k != 'password'})
+        st.write(f"**Student ID used for lookup:** `{student_id}`")
+    
     # Student Info
     col1, col2 = st.columns(2)
     with col1:
-        st.write(f"**ID:** {student.get('id')}")
-        st.write(f"**Class:** {student.get('class')}")
-        st.write(f"**Department:** {student.get('department')}")
+        st.write(f"**ID:** {student.get('id', 'N/A')}")
+        st.write(f"**Class:** {student.get('class', 'Not assigned')}")
+        st.write(f"**Department:** {student.get('department', 'Not assigned')}")
     with col2:
-        st.write(f"**Email:** {student.get('email')}")
-        st.write(f"**Phone:** {student.get('phone')}")
+        st.write(f"**Email:** {student.get('email', 'Not provided')}")
+        st.write(f"**Phone:** {student.get('phone', 'Not provided')}")
+        
+    # Show additional info if available
+    if student.get('roll_no'):
+        st.write(f"**Roll Number:** {student.get('roll_no')}")
+    if student.get('gender'):
+        st.write(f"**Gender:** {student.get('gender')}")
+    if user.get('auth_method'):
+        st.write(f"**Login Method:** {user.get('auth_method', 'Unknown').title()}")
+    if user.get('auth_time'):
+        st.write(f"**Login Time:** {user.get('auth_time', 'Unknown')}")
     
     st.markdown("---")
     
