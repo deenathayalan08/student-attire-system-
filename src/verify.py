@@ -6,43 +6,84 @@ from .model import AttireClassifier
 
 
 def _keyword_score_from_hue(mean_h: float, keyword: str) -> float:
-	# Very rough mapping from hue to color keyword
+	# More strict color matching for professional verification
 	# hue in [0,180]: 0 red, 30 yellow, 60 green, 90 cyan, 120 blue, 150 magenta
 	kw = (keyword or "").lower()
 	if kw in ("white", "light"):
-		return 0.7
+		# White should have low saturation and high brightness
+		return 0.8 if mean_h < 30 or mean_h > 150 else 0.3
 	if kw in ("dark", "black"):
-		return 0.7
+		# Dark colors should have low brightness
+		return 0.8
 	if kw == "blue":
-		return float(np.exp(-((mean_h - 120.0) ** 2) / (2 * 12.0 ** 2)))
+		# Stricter blue detection (hue 100-140)
+		return float(np.exp(-((mean_h - 120.0) ** 2) / (2 * 8.0 ** 2))) if 100 <= mean_h <= 140 else 0.2
 	if kw == "green":
-		return float(np.exp(-((mean_h - 60.0) ** 2) / (2 * 12.0 ** 2)))
+		# Stricter green detection (hue 50-80)
+		return float(np.exp(-((mean_h - 60.0) ** 2) / (2 * 8.0 ** 2))) if 50 <= mean_h <= 80 else 0.2
 	if kw in ("yellow", "hi-vis", "high-visibility"):
-		return float(np.exp(-((mean_h - 30.0) ** 2) / (2 * 12.0 ** 2)))
-	return 0.5
+		# Stricter yellow detection (hue 20-40)
+		return float(np.exp(-((mean_h - 30.0) ** 2) / (2 * 8.0 ** 2))) if 20 <= mean_h <= 40 else 0.2
+	return 0.3  # Lower default score for unmatched colors
 
 
 def rule_based_checks(features: Dict[str, Any], cfg: AppConfig) -> Dict[str, Any]:
-	# Torso expected color
+	# Enhanced rule-based checks with stricter criteria
 	torso_h = float(features.get("torso_mean_h", 90.0))
-	top_score = _keyword_score_from_hue(torso_h, cfg.expected_top)
-	# Legs expected darker value
+	torso_s = float(features.get("torso_mean_s", 50.0))
+	torso_v = float(features.get("torso_mean_v", 128.0))
+	torso_brightness = float(features.get("torso_brightness", 128.0))
+	
+	legs_h = float(features.get("legs_mean_h", 90.0))
+	legs_s = float(features.get("legs_mean_s", 50.0))
 	legs_v = float(features.get("legs_mean_v", 60.0))
-	bottom_score = 1.0 - (legs_v / 255.0) if (cfg.expected_bottom or "").lower() in ("dark", "black") else (legs_v / 255.0)
+	legs_brightness = float(features.get("legs_brightness", 128.0))
+	
+	feet_h = float(features.get("feet_mean_h", 90.0))
+	feet_s = float(features.get("feet_mean_s", 50.0))
+	feet_v = float(features.get("feet_mean_v", 60.0))
+	feet_brightness = float(features.get("feet_brightness", 128.0))
+	
+	# Stricter top color evaluation
+	if cfg.expected_top.lower() in ("white", "light"):
+		# White shirt: low saturation (<30), high brightness (>180)
+		top_score = 0.8 if (torso_s < 30 and torso_brightness > 180) else 0.2
+	else:
+		top_score = _keyword_score_from_hue(torso_h, cfg.expected_top)
+	
+	# Stricter bottom evaluation - dark pants required
+	if cfg.expected_bottom.lower() in ("dark", "black"):
+		# Dark pants: low brightness (<100) and reasonable saturation
+		bottom_score = 0.8 if (legs_brightness < 100 and legs_v < 120) else 0.2
+	else:
+		bottom_score = 1.0 - (legs_v / 255.0)
 	bottom_score = float(np.clip(bottom_score, 0.0, 1.0))
 
-	# Shoes vs barefoot heuristic: feet brightness low implies shoes
-	feet_v = float(features.get("feet_mean_v", 60.0))
-	shoes_score = 1.0 - (feet_v / 255.0)
+	# Stricter shoe evaluation - black shoes required for males
+	gender = (cfg.policy_gender or "male").lower()
+	if gender == "male" and getattr(cfg, "require_black_shoes_male", True):
+		# Black shoes: low saturation (<40), low brightness (<120)
+		shoes_score = 0.8 if (feet_s < 40 and feet_brightness < 120) else 0.2
+	else:
+		# General shoe detection: low brightness implies shoes
+		shoes_score = 1.0 - (feet_v / 255.0)
 	shoes_score = float(np.clip(shoes_score, 0.0, 1.0))
 
-	# Aggregate
+	# More strict aggregation - all components must pass for high score
 	rule_score = float(np.clip(0.4 * top_score + 0.4 * bottom_score + 0.2 * shoes_score, 0.0, 1.0))
+	
+	# Additional penalty if any component fails badly
+	if top_score < 0.5 or bottom_score < 0.5 or shoes_score < 0.5:
+		rule_score *= 0.6  # 40% penalty for failing any component
+	
 	return {
 		"top_score": top_score,
 		"bottom_score": bottom_score,
 		"shoes_score": shoes_score,
 		"rule_score": rule_score,
+		"top_details": f"H:{torso_h:.1f} S:{torso_s:.1f} V:{torso_v:.1f} B:{torso_brightness:.1f}",
+		"bottom_details": f"H:{legs_h:.1f} S:{legs_s:.1f} V:{legs_v:.1f} B:{legs_brightness:.1f}",
+		"shoes_details": f"H:{feet_h:.1f} S:{feet_s:.1f} V:{feet_v:.1f} B:{feet_brightness:.1f}",
 	}
 
 
@@ -103,9 +144,9 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 	# Determine if image is clearly a headshot (small square/landscape)
 	is_clearly_headshot = (
 		has_valid_dimensions and  # Have dimensions
-		aspect_ratio <= 1.0 and  # Square or landscape (width >= height)
-		image_height < 400 and  # Small height
-		image_width < 400 and  # Small width
+		aspect_ratio <= 1.2 and  # Square or slightly portrait (width >= 80% of height)
+		image_height <= 640 and  # Medium or small height
+		image_width <= 640 and  # Medium or small width
 		not has_full_body_pose  # No pose landmarks
 	)
 	
@@ -220,32 +261,34 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		top_score = _keyword_score_from_hue(torso_h, cfg.expected_top)
 
 	if profile == "regular":
-		# Bottom wear check - for males, allow any color pants if configured
+		# Bottom wear check - STRICT: Always require dark pants for professional appearance
 		gender = (cfg.policy_gender or "male").lower()
 		allow_any_color_pants = (gender == "male" and getattr(cfg, "allow_any_color_pants_male", True))
 		
 		if legs_visible:
-			# For males with any color pants allowed: only check if pants are present (not shorts)
-			# For others: check for dark color
-			if allow_any_color_pants:
-				# Males: any color pants are acceptable - no color-based violation
-				# Only check for pants length (shorts vs full pants) which is done below
-				# If legs are visible and have texture, pants are likely present
-				# No violation needed here for color
-				pass
-			elif not bottom_dark:
-				# For non-males or when dark pants required: check color
-				# But only if we have valid color data (not default values)
-				if legs_v > 0.0 or legs_brightness > 0.0:
+			# STRICT: Always check for dark color unless explicitly allowed
+			if not allow_any_color_pants or not bottom_dark:
+				# Check if pants are too light/bright for professional dress code - MORE LENIENT THRESHOLDS
+				if legs_brightness > 140 or legs_v > 160:  # Increased from 120/140 to 140/160
 					violations.append({
-						"item": "Proper Bottom Wear",
-						"required": "Dark trousers/skirt",
-						"detected": "Light colored or inappropriate bottom wear",
+						"item": "Bottom Wear Color",
+						"required": "Dark colored trousers/pants (professional dress code)",
+						"detected": f"Light colored pants detected (brightness: {legs_brightness:.1f})",
 						"score": bottom_score,
 						"severity": "high",
-						"reason": f"Expected dark bottom wear but detected light color (brightness: {legs_brightness:.1f}, value: {legs_v:.1f})"
+						"reason": f"Professional dress code requires dark pants. Detected brightness: {legs_brightness:.1f} (max allowed: 140), value: {legs_v:.1f} (max allowed: 160)"
 					})
-				# If color data is default/zero, skip violation (detection may have failed)
+			
+			# Additional check for pants vs shorts
+			if legs_brightness < 50:  # Very dark might indicate bare legs (shorts)
+				violations.append({
+					"item": "Bottom Wear Coverage", 
+					"required": "Full-length pants",
+					"detected": "Possible shorts or insufficient leg coverage",
+					"score": 0.3,
+					"severity": "medium",
+					"reason": f"Very low leg brightness ({legs_brightness:.1f}) may indicate shorts or bare legs"
+				})
 		elif not legs_visible:
 			# Only add "not visible" violation if image is clearly a headshot
 			# This should rarely happen now since we default to legs_visible = True
@@ -278,20 +321,27 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 					"reason": f"Expected shoes but detected bare feet (brightness: {feet_brightness:.1f}, texture: {feet_texture:.1f})"
 				})
 			elif require_black_shoes and shoes_present and not shoes_black:
-				# Only flag as violation if saturation is high (S > 80) indicating colored shoes
-				# High saturation means the shoes have a distinct color (not black/gray)
-				# Low saturation (< 80) even with high brightness could be black shoes with reflections
-				if feet_s > 80:
+				# STRICT: Check for black shoes with more realistic criteria
+				# Black shoes should have: low saturation (<50) AND low brightness (<130)
+				is_actually_black = (feet_s < 50 and feet_brightness < 130)
+				
+				if not is_actually_black:
+					# Determine if shoes are clearly non-black
+					if feet_s > 60 or feet_brightness > 150:
+						severity = "high"
+						reason = f"Professional dress code requires black shoes. Detected non-black shoes: saturation {feet_s:.1f} (max: 50), brightness {feet_brightness:.1f} (max: 130)"
+					else:
+						severity = "medium" 
+						reason = f"Shoe color unclear - may not be black. Saturation: {feet_s:.1f}, brightness: {feet_brightness:.1f}"
+					
 					violations.append({
-						"item": "Shoe Color",
-						"required": "Black shoes only",
-						"detected": f"Non-black shoes detected (high saturation indicates colored shoes)",
+						"item": "Shoe Color Compliance",
+						"required": "Black shoes only (professional dress code)",
+						"detected": f"Non-black or unclear shoe color (S:{feet_s:.1f}, B:{feet_brightness:.1f})",
 						"score": black_shoes_score,
-						"severity": "high",
-						"reason": f"Male students must wear black shoes. Detected shoe has high saturation (S: {feet_s:.1f}) indicating colored shoes, not black. (HSV - H: {feet_h:.1f}, S: {feet_s:.1f}, V: {feet_v:.1f}, Brightness: {feet_brightness:.1f})"
+						"severity": severity,
+						"reason": reason
 					})
-				# If saturation is low but brightness/V are high, it might be black shoes with strong reflections
-				# In this case, don't flag as violation to avoid false positives
 		elif not feet_visible:
 			# Only add "not visible" violation if image is clearly a headshot
 			# This should rarely happen now since we default to feet_visible = True
@@ -326,13 +376,21 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		def _looks_like_kurti_dupatta() -> bool:
 			return (torso_brightness > 120) and (torso_s < 140)
 		
-		# SIMPLIFIED: Don't check color appropriateness, just check if wearing clothing
-		# top_ok = top_appropriate  # OLD: This checks color!
-		top_ok = True  # NEW: Assume top is OK by default
+		# STRICT: Check both clothing presence AND color appropriateness
+		top_ok = top_appropriate and (torso_brightness > 30)  # Must have appropriate color AND be wearing something
+		
+		# Additional checks based on gender and requirements
 		if gender == "male" and getattr(cfg, "require_shirt_for_male", True):
-			top_ok = _looks_like_shirt()  # Only check if wearing something, not color
+			shirt_ok = _looks_like_shirt()
+			# For males: must wear shirt AND have appropriate color (usually white)
+			if cfg.expected_top.lower() in ("white", "light"):
+				# White shirt required: low saturation + high brightness
+				white_shirt_ok = (torso_s < 50 and torso_brightness > 160)
+				top_ok = shirt_ok and white_shirt_ok
+			else:
+				top_ok = shirt_ok and top_appropriate
 		elif gender == "female" and getattr(cfg, "require_kurti_dupatta_for_female", True):
-			top_ok = _looks_like_kurti_dupatta()
+			top_ok = _looks_like_kurti_dupatta() and top_appropriate
 
 		if not top_ok:
 			violations.append({
@@ -453,16 +511,44 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 			})
 	
 	# Check ID card for all profiles if enabled (outside profile-specific logic)
-	if cfg.enable_id_card_detection and cfg.id_card_required:
-		if not id_card_detected or id_card_confidence < cfg.id_card_confidence_threshold:
+	# BUT ONLY if image shows torso area (not for headshots)
+	if cfg.enable_id_card_detection and cfg.id_card_required and not is_clearly_headshot:
+		# More realistic ID card detection
+		id_card_ok = (id_card_detected and id_card_confidence >= cfg.id_card_confidence_threshold)
+		
+		# Also check for chain/lanyard as indicator of ID card
+		has_lanyard = (chain_detected > 0.3 and chain_confidence > 0.3)
+		
+		if not id_card_ok and not has_lanyard:
+			# No ID card and no lanyard detected
 			violations.append({
-				"item": "ID Card",
-				"required": "Valid student ID card visible",
-				"detected": "No ID card detected or confidence too low",
+				"item": "Student ID Card",
+				"required": "Visible student ID card (worn around neck or clipped to shirt)",
+				"detected": f"No ID card detected (confidence: {id_card_confidence:.1%})",
 				"score": id_card_confidence,
-				"severity": "high",
-				"reason": f"ID card detection confidence: {id_card_confidence:.1%} (minimum required: {cfg.id_card_confidence_threshold:.1%})"
+				"severity": "medium",  # Reduced from "high" to "medium"
+				"reason": f"Student ID card is mandatory and must be visible. Detection confidence: {id_card_confidence:.1%} (required: {cfg.id_card_confidence_threshold:.1%}), lanyard detected: {has_lanyard}"
 			})
+		elif not id_card_ok and has_lanyard:
+			# Lanyard detected but ID card not clear - REDUCE SEVERITY
+			violations.append({
+				"item": "ID Card Visibility",
+				"required": "ID card must be clearly visible",
+				"detected": f"Lanyard detected but ID card not clearly visible (confidence: {id_card_confidence:.1%})",
+				"score": max(id_card_confidence, 0.6),  # Give more credit for lanyard
+				"severity": "low",  # Reduced from "medium" to "low"
+				"reason": f"Lanyard/chain detected indicating ID card is worn, but card itself not clearly visible. Please ensure ID card faces forward and is not obscured."
+			})
+	elif cfg.enable_id_card_detection and cfg.id_card_required and is_clearly_headshot:
+		# For headshots, add informational note instead of violation
+		violations.append({
+			"item": "ID Card Check",
+			"required": "Student ID card verification",
+			"detected": "Cannot verify ID card in headshot/passport photo",
+			"score": 1.0,  # Neutral score
+			"severity": "low",
+			"reason": "ID card verification skipped for headshot/passport photo format"
+		})
 
 	return violations
 
@@ -475,13 +561,20 @@ def verify_attire_and_safety(features: Dict[str, Any], cfg: AppConfig, clf: Atti
 
 	# ML model probability for best class if available
 	if cfg.enable_model and clf is not None and clf.model is not None:
-		feature_values = [v for k, v in features.items() if k not in ("image", "label")]
-		X = np.array(feature_values, dtype=float).reshape(1, -1)
-		proba = clf.predict_proba(X)[0]
-		p = float(np.max(proba))
-		combined_score = float(0.5 * combined_score + 0.5 * p)
-		if clf.label_names:
-			label = clf.label_names[int(np.argmax(proba))]
+		try:
+			# Handle feature mismatch gracefully
+			feature_values = [v for k, v in features.items() if k not in ("image", "label")]
+			X = np.array(feature_values, dtype=float).reshape(1, -1)
+			proba = clf.predict_proba(X)[0]
+			p = float(np.max(proba))
+			combined_score = float(0.5 * combined_score + 0.5 * p)
+			if clf.label_names:
+				label = clf.label_names[int(np.argmax(proba))]
+		except (ValueError, Exception) as e:
+			# Feature mismatch or other ML error - fall back to rule-based only
+			print(f"Warning: ML model error ({e}), using rule-based verification only")
+			combined_score = rule.get("rule_score", 0.5)
+			label = "rule_based"
 
 	# Get detailed violations
 	violations = _infer_missing_items(features, cfg)
@@ -490,37 +583,47 @@ def verify_attire_and_safety(features: Dict[str, Any], cfg: AppConfig, clf: Atti
 	success_score = combined_score
 	fail_score = 1.0 - combined_score
 	
-	# Calculate violation penalty based on severity
+	# Calculate violation penalty based on severity - BALANCED
 	violation_penalty = 0.0
 	critical_violations = 0
 	high_violations = 0
 	medium_violations = 0
+	low_violations = 0
 	
 	for violation in violations:
 		severity = violation.get("severity", "medium")
 		if severity == "critical":
 			critical_violations += 1
-			violation_penalty += 0.3
+			violation_penalty += 0.4  # Critical violations are serious
 		elif severity == "high":
 			high_violations += 1
-			violation_penalty += 0.2
+			violation_penalty += 0.25  # High violations are important
 		elif severity == "medium":
 			medium_violations += 1
-			violation_penalty += 0.1
+			violation_penalty += 0.15  # Medium violations are moderate
+		elif severity == "low":
+			low_violations += 1
+			violation_penalty += 0.05  # Low violations are minor
 	
 	# Apply penalty to scores
 	success_score = float(np.clip(success_score - violation_penalty, 0.0, 1.0))
 	fail_score = float(np.clip(fail_score + violation_penalty, 0.0, 1.0))
 	
-	# Determine overall status
+	# Determine overall status - BALANCED CRITERIA
 	has_critical = critical_violations > 0
 	has_high = high_violations > 0
 	has_medium = medium_violations > 0
+	has_low = low_violations > 0
 	
-	if has_critical or (has_high and success_score < 0.6) or success_score < cfg.confidence_threshold:
+	# Balanced pass criteria - more realistic for different image types
+	if has_critical or success_score < 0.25:
 		status = "FAIL"
-	elif has_high or has_medium:
+	elif has_high or success_score < 0.45:
+		status = "WARNING" 
+	elif has_medium or success_score < cfg.confidence_threshold:
 		status = "WARNING"
+	elif has_low and success_score < 0.7:
+		status = "WARNING"  # Low violations only cause warnings if score is low
 	else:
 		status = "PASS"
 	
@@ -530,6 +633,7 @@ def verify_attire_and_safety(features: Dict[str, Any], cfg: AppConfig, clf: Atti
 		"critical": critical_violations,
 		"high": high_violations,
 		"medium": medium_violations,
+		"low": low_violations,
 		"violations": violations
 	}
 	
@@ -547,7 +651,8 @@ def verify_attire_and_safety(features: Dict[str, Any], cfg: AppConfig, clf: Atti
 			"severity_breakdown": {
 				"critical": critical_violations,
 				"high": high_violations,
-				"medium": medium_violations
+				"medium": medium_violations,
+				"low": low_violations
 			}
 		}
 	}

@@ -11,11 +11,17 @@ from ..features import extract_features_from_image, extract_pose
 from ..verify import verify_attire_and_safety
 from ..db import insert_event, get_student
 from ..utils.vis import draw_pose_annotations, draw_violation_indicators, overlay_detailed_badge
+from ..rbac import require_login, check_data_access_permission, has_permission, Permission
 
 
+@require_login
 def show_student_dashboard(cfg: AppConfig) -> None:
-    """Display student dashboard with attire verification"""
+    """Display student dashboard with attire verification - RBAC Protected"""
     user = st.session_state.get('user')
+    
+    # Import RBAC functions
+    from ..rbac import check_data_access_permission, has_permission, Permission
+    
     if not user:
         st.error("❌ Please login first to access your dashboard")
         st.info("💡 You need to be logged in to view your student dashboard")
@@ -54,6 +60,23 @@ def show_student_dashboard(cfg: AppConfig) -> None:
         if st.button("🔐 Go to Login"):
             st.session_state.current_page = 'face_auth'
             st.rerun()
+        return
+    
+    # RBAC: Check if user can access this student's data
+    if not check_data_access_permission(student_id):
+        st.error("🚫 **Access Denied**")
+        st.warning("You don't have permission to access this student's data.")
+        st.info("Students can only view their own dashboard.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🏠 Go to Home", use_container_width=True, type="primary"):
+                st.session_state.current_page = 'home'
+                st.rerun()
+        with col2:
+            if st.button("🔐 Login Again", use_container_width=True):
+                st.session_state.current_page = 'face_auth'
+                st.rerun()
         return
     
     student = get_student(student_id, cfg=cfg)
@@ -131,47 +154,125 @@ def show_student_dashboard(cfg: AppConfig) -> None:
                     st.rerun()
             return
     
-    st.title("Student Dashboard")
-    st.markdown(f"### Welcome, {student.get('name', 'Student')}!")
+    # Modern dashboard header
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px;">
+        <div style="display: flex; align-items: center; color: white;">
+            <div style="flex: 1;">
+                <h1 style="margin: 0; font-size: 2rem; font-weight: 600;">📋 Student Dashboard</h1>
+                <p style="margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 1.1rem;">Welcome back, {student.get('name', 'Student')[:30]}!</p>
+            </div>
+            <div style="text-align: right;">
+                <div style="background: rgba(255,255,255,0.2); padding: 0.5rem 1rem; border-radius: 20px; font-size: 0.9rem;">
+                    🔐 {user.get('auth_method', 'Unknown').title()} Auth
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Debug info (can be removed later)
-    with st.expander("🔧 Debug Info (for troubleshooting)", expanded=False):
-        st.write("**User Session Data:**")
-        st.json({k: v for k, v in user.items() if k != 'password'})
-        st.write("**Student Record Data:**")
-        st.json({k: v for k, v in student.items() if k != 'password'})
-        st.write(f"**Student ID used for lookup:** `{student_id}`")
+    # Debug info (collapsible for development)
+    with st.expander("🔧 System Debug (Development Mode)", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**User Session Data:**")
+            st.json({k: v for k, v in user.items() if k != 'password'})
+        with col2:
+            st.write("**Student Record Data:**")
+            st.json({k: v for k, v in student.items() if k != 'password'})
+        st.info(f"**Lookup ID:** `{student_id}`")
     
-    # Student Info
-    col1, col2 = st.columns(2)
+    # Student information cards
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        st.write(f"**ID:** {student.get('id', 'N/A')}")
-        st.write(f"**Class:** {student.get('class', 'Not assigned')}")
-        st.write(f"**Department:** {student.get('department', 'Not assigned')}")
+        st.markdown(f"""
+        <div style="background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-left: 4px solid #007bff;">
+            <h4 style="color: #007bff; margin-bottom: 1rem; font-size: 1.1rem;">👤 Personal Info</h4>
+            <div style="color: #495057; line-height: 1.8;">
+                <div><strong>ID:</strong> {student.get('id', 'N/A')}</div>
+                <div><strong>Roll No:</strong> {student.get('roll_no', 'N/A')}</div>
+                <div><strong>Gender:</strong> {student.get('gender', 'N/A')}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        st.write(f"**Email:** {student.get('email', 'Not provided')}")
-        st.write(f"**Phone:** {student.get('phone', 'Not provided')}")
-        
-    # Show additional info if available
-    if student.get('roll_no'):
-        st.write(f"**Roll Number:** {student.get('roll_no')}")
-    if student.get('gender'):
-        st.write(f"**Gender:** {student.get('gender')}")
-    if user.get('auth_method'):
-        st.write(f"**Login Method:** {user.get('auth_method', 'Unknown').title()}")
-    if user.get('auth_time'):
-        st.write(f"**Login Time:** {user.get('auth_time', 'Unknown')}")
+        st.markdown(f"""
+        <div style="background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-left: 4px solid #28a745;">
+            <h4 style="color: #28a745; margin-bottom: 1rem; font-size: 1.1rem;">🎓 Academic Info</h4>
+            <div style="color: #495057; line-height: 1.8;">
+                <div><strong>Class:</strong> {student.get('class', 'Not assigned')}</div>
+                <div><strong>Department:</strong> {student.get('department', 'Not assigned')[:25]}{'...' if len(student.get('department', '')) > 25 else ''}</div>
+                <div><strong>Status:</strong> {'✅ Verified' if student.get('verified') else '⚠️ Pending'}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    st.markdown("---")
+    with col3:
+        st.markdown(f"""
+        <div style="background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-left: 4px solid #ffc107;">
+            <h4 style="color: #ffc107; margin-bottom: 1rem; font-size: 1.1rem;">📞 Contact Info</h4>
+            <div style="color: #495057; line-height: 1.8;">
+                <div><strong>Email:</strong> {student.get('email', 'Not provided')[:20]}{'...' if len(student.get('email', '')) > 20 else ''}</div>
+                <div><strong>Phone:</strong> {student.get('phone', 'Not provided')}</div>
+                <div><strong>Login:</strong> {user.get('auth_method', 'Unknown').title()}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Quick Action Buttons
-    col1, col2 = st.columns(2)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Quick Action Dashboard
+    st.markdown("""
+    <div style="margin: 1.5rem 0 1rem 0;">
+        <h3 style="color: #2c3e50; font-weight: 600;">⚡ Quick Actions</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
-        if st.button("📊 View Accuracy Report", use_container_width=True, key="view_accuracy_btn"):
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📊</div>
+            <div style="font-weight: 600; font-size: 0.9rem;">Accuracy Report</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("📊 View Report", use_container_width=True, key="view_accuracy_btn"):
             st.session_state['show_accuracy'] = True
+    
     with col2:
-        if st.button("📋 View Verification History", use_container_width=True, key="view_report_btn"):
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 1.5rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📋</div>
+            <div style="font-weight: 600; font-size: 0.9rem;">History</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("📋 View History", use_container_width=True, key="view_report_btn"):
             st.session_state['show_report'] = True
+    
+    with col3:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 1.5rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎓</div>
+            <div style="font-weight: 600; font-size: 0.9rem;">Verify Now</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🎓 Quick Verify", use_container_width=True, key="quick_verify_btn"):
+            # Scroll to verification section
+            st.session_state['scroll_to_verify'] = True
+    
+    with col4:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); padding: 1.5rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">👤</div>
+            <div style="font-weight: 600; font-size: 0.9rem;">Profile</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("👤 My Profile", use_container_width=True, key="profile_quick_btn"):
+            st.session_state.current_page = 'profile'
+            st.rerun()
     
     # Show Accuracy Report if requested
     if st.session_state.get('show_accuracy', False):
@@ -189,28 +290,96 @@ def show_student_dashboard(cfg: AppConfig) -> None:
             st.rerun()
         st.markdown("---")
     
-    st.markdown("## 🎓 Attire Verification")
-    st.info("📸 Verify your uniform compliance by uploading an image, taking a photo, or uploading a video.")
+    # Verification section with modern design
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 20px; text-align: center; color: white; margin: 2rem 0;">
+        <h2 style="margin-bottom: 1rem; font-weight: 600;">🎓 AI-Powered Attire Verification</h2>
+        <p style="margin: 0; opacity: 0.9; font-size: 1.1rem;">Upload an image, take a photo, or record a video for instant compliance analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["📤 Upload Image", "📷 Take Photo", "🎥 Upload Video"])
+    # Enhanced verification options
+    st.markdown("""
+    <div style="margin: 1rem 0;">
+        <h4 style="color: #2c3e50; text-align: center;">Choose Your Verification Method</h4>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs([
+        "📤 Upload Image", 
+        "📷 Live Camera", 
+        "🎥 Video Analysis"
+    ])
     
     with tab1:
-        st.subheader("Upload Image")
-        uploaded = st.file_uploader("Upload full-body image", type=["jpg", "jpeg", "png"], key="dashboard_upload")
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 15px; margin-bottom: 1rem;">
+            <h4 style="color: #007bff; margin-bottom: 1rem;">📤 Upload Image Verification</h4>
+            <p style="color: #6c757d; margin-bottom: 1rem;">Upload a clear, full-body image for AI analysis</p>
+            <div style="background: white; padding: 1rem; border-radius: 10px; border-left: 4px solid #007bff;">
+                <strong>📋 Best Practices:</strong><br>
+                • Full-body shot preferred<br>
+                • Good lighting conditions<br>
+                • Plain background<br>
+                • Uniform clearly visible
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        uploaded = st.file_uploader(
+            "Choose an image file", 
+            type=["jpg", "jpeg", "png"], 
+            key="dashboard_upload",
+            help="Upload JPG, JPEG, or PNG files up to 200MB"
+        )
         if uploaded:
             process_attire_verification(uploaded, student, cfg)
     
     with tab2:
-        st.subheader("Take Photo")
-        st.info("💡 Stand in good lighting with your full body visible")
-        camera = st.camera_input("Capture full-body photo", key="dashboard_camera")
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 15px; margin-bottom: 1rem;">
+            <h4 style="color: #28a745; margin-bottom: 1rem;">📷 Live Camera Verification</h4>
+            <p style="color: #6c757d; margin-bottom: 1rem;">Use your device camera for real-time capture</p>
+            <div style="background: white; padding: 1rem; border-radius: 10px; border-left: 4px solid #28a745;">
+                <strong>📋 Camera Tips:</strong><br>
+                • Stand 3-4 feet from camera<br>
+                • Ensure good lighting<br>
+                • Keep device steady<br>
+                • Full body in frame
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        camera = st.camera_input(
+            "📸 Capture your photo", 
+            key="dashboard_camera",
+            help="Position yourself with full body visible and good lighting"
+        )
         if camera:
             process_attire_verification(camera, student, cfg)
     
     with tab3:
-        st.subheader("Upload Video")
-        st.info("💡 Upload a short video showing your full attire")
-        video = st.file_uploader("Upload video", type=["mp4", "mov", "avi", "mkv"], key="dashboard_video")
+        st.markdown("""
+        <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 15px; margin-bottom: 1rem;">
+            <h4 style="color: #ffc107; margin-bottom: 1rem;">🎥 Video Analysis</h4>
+            <p style="color: #6c757d; margin-bottom: 1rem;">Upload a short video for comprehensive frame-by-frame analysis</p>
+            <div style="background: white; padding: 1rem; border-radius: 10px; border-left: 4px solid #ffc107;">
+                <strong>📋 Video Guidelines:</strong><br>
+                • 5-30 seconds duration<br>
+                • Show full attire clearly<br>
+                • Steady recording<br>
+                • Multiple angles helpful
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        video = st.file_uploader(
+            "Choose a video file", 
+            type=["mp4", "mov", "avi", "mkv"], 
+            key="dashboard_video",
+            help="Upload MP4, MOV, AVI, or MKV files up to 200MB"
+        )
         if video:
             process_video_verification(video, student, cfg)
 

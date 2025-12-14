@@ -30,6 +30,14 @@ from src.db import (
 )
 from src.alerts import notify_non_compliance, get_id_card_status_message, get_detailed_id_card_message, notify_id_card_status
 from src.security import check_and_alert_unauthorized_student, check_and_log_entry_time, check_and_log_exit_time, check_and_alert_emergency_violations
+from src.rbac import (
+	require_permission, require_admin, require_student_or_admin, require_login,
+	Permission, Role, has_permission, is_admin, is_student, is_logged_in,
+	filter_navigation_by_role, show_permission_denied_message, log_access_attempt,
+	can_manage_students, can_manage_departments, can_view_all_reports, 
+	can_modify_system_settings, can_delete_data, can_export_data,
+	check_data_access_permission, get_current_user, get_user_role
+)
 
 
 def init_session_state() -> None:
@@ -67,21 +75,7 @@ def get_current_page() -> str:
 	return st.session_state.get('current_page', 'home')
 
 
-def is_logged_in() -> bool:
-	"""Check if user is logged in"""
-	return st.session_state.get('user') is not None
-
-
-def is_admin() -> bool:
-	"""Check if current user is admin"""
-	user = st.session_state.get('user')
-	return user and user.get('role') == 'admin'
-
-
-def is_student() -> bool:
-	"""Check if current user is student"""
-	user = st.session_state.get('user')
-	return user and user.get('role') == 'student'
+# Note: is_logged_in(), is_admin(), and is_student() functions are now imported from src.rbac module
 
 
 def logout_and_redirect() -> None:
@@ -109,9 +103,9 @@ def ensure_config_defaults(cfg: AppConfig) -> AppConfig:
 
 
 def sidebar_settings() -> None:
-	# Only show settings if user is admin
-	user = st.session_state.get('user')
-	if not user or user.get('role') != 'admin':
+	"""System settings - Admin only with RBAC protection"""
+	# RBAC: Only admins can access system settings
+	if not can_modify_system_settings():
 		return
 
 	# Toggle button for settings
@@ -172,135 +166,364 @@ def sidebar_settings() -> None:
 
 
 def render_home():
-	st.title("🏫 Student Attire Verification System")
-	st.markdown("---")
-
-	# Welcome message
+	# Hero section with modern design
 	st.markdown("""
-	### Welcome to the Student Attire Verification System
+	<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 3rem 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px; text-align: center;">
+		<h1 style="color: white; font-size: 2.5rem; margin-bottom: 0.5rem; font-weight: 700;">🏫 SAVS Enterprise</h1>
+		<h3 style="color: rgba(255,255,255,0.9); margin-bottom: 1rem; font-weight: 400;">Student Attire Verification System</h3>
+		<p style="color: rgba(255,255,255,0.8); font-size: 1.1rem; max-width: 600px; margin: 0 auto;">
+			AI-powered dress code compliance monitoring with biometric authentication and real-time analytics
+		</p>
+	</div>
+	""", unsafe_allow_html=True)
+
+	# System status dashboard
+	col1, col2, col3, col4 = st.columns(4)
 	
-	This system helps ensure compliance with dress code and safety regulations across campus.
-	""")
+	with col1:
+		st.markdown("""
+		<div style="background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #28a745;">
+			<div style="font-size: 2rem; color: #28a745; margin-bottom: 0.5rem;">✅</div>
+			<div style="font-weight: 600; color: #2c3e50;">System Online</div>
+			<div style="color: #6c757d; font-size: 0.9rem;">All services active</div>
+		</div>
+		""", unsafe_allow_html=True)
 	
-	st.markdown("---")
+	with col2:
+		# Get real stats
+		try:
+			from .db import get_compliance_stats
+			stats = get_compliance_stats(cfg=st.session_state.config)
+			total_students = stats.get('total_students', 0)
+		except:
+			total_students = 0
+			
+		st.markdown(f"""
+		<div style="background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #007bff;">
+			<div style="font-size: 2rem; color: #007bff; margin-bottom: 0.5rem;">👥</div>
+			<div style="font-weight: 600; color: #2c3e50;">{total_students} Students</div>
+			<div style="color: #6c757d; font-size: 0.9rem;">Registered users</div>
+		</div>
+		""", unsafe_allow_html=True)
 	
-	# Quick access cards
-	st.markdown("### 🚀 Quick Access")
+	with col3:
+		try:
+			verified_students = stats.get('verified_students', 0)
+		except:
+			verified_students = 0
+			
+		st.markdown(f"""
+		<div style="background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #ffc107;">
+			<div style="font-size: 2rem; color: #ffc107; margin-bottom: 0.5rem;">🔐</div>
+			<div style="font-weight: 600; color: #2c3e50;">{verified_students} Verified</div>
+			<div style="color: #6c757d; font-size: 0.9rem;">Face authenticated</div>
+		</div>
+		""", unsafe_allow_html=True)
+	
+	with col4:
+		try:
+			compliance_rate = stats.get('compliance_percentage', 0)
+		except:
+			compliance_rate = 0
+			
+		st.markdown(f"""
+		<div style="background: white; padding: 1.5rem; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; border-left: 4px solid #17a2b8;">
+			<div style="font-size: 2rem; color: #17a2b8; margin-bottom: 0.5rem;">📊</div>
+			<div style="font-weight: 600; color: #2c3e50;">{compliance_rate:.1f}%</div>
+			<div style="color: #6c757d; font-size: 0.9rem;">Compliance rate</div>
+		</div>
+		""", unsafe_allow_html=True)
+	
+	st.markdown("<br>", unsafe_allow_html=True)
+	
+	# Quick access with modern cards
+	st.markdown("""
+	<div style="margin: 2rem 0 1rem 0;">
+		<h3 style="color: #2c3e50; font-weight: 600; margin-bottom: 1rem;">🚀 Quick Access</h3>
+	</div>
+	""", unsafe_allow_html=True)
 	
 	col1, col2, col3 = st.columns(3)
 	
 	with col1:
-		st.markdown("#### 🎓 Students")
-		st.write("Login, register, and verify your attire compliance")
-		if st.button("Go to Student Portal", use_container_width=True, type="primary", key="home_student"):
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+			<div style="font-size: 3rem; margin-bottom: 1rem;">🎓</div>
+			<h4 style="margin-bottom: 1rem; font-weight: 600;">Student Portal</h4>
+			<p style="margin-bottom: 1.5rem; opacity: 0.9;">Login, register, and verify your attire compliance with AI-powered analysis</p>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		if st.button("🎓 Enter Student Portal", use_container_width=True, type="primary", key="home_student"):
 			navigate_to("student_portal")
 	
 	with col2:
-		st.markdown("#### 👨‍💼 Admin")
-		st.write("Manage students, departments, and view reports")
-		if st.button("Go to Admin Portal", use_container_width=True, type="primary", key="home_admin"):
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 2rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+			<div style="font-size: 3rem; margin-bottom: 1rem;">👨‍💼</div>
+			<h4 style="margin-bottom: 1rem; font-weight: 600;">Admin Portal</h4>
+			<p style="margin-bottom: 1.5rem; opacity: 0.9;">Manage students, departments, and view comprehensive analytics reports</p>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		if st.button("👨‍💼 Admin Access", use_container_width=True, type="primary", key="home_admin"):
 			navigate_to("admin_login")
 	
 	with col3:
-		st.markdown("#### ℹ️ About")
-		st.write("Learn more about the system and features")
-		if st.button("View Information", use_container_width=True, key="home_info"):
-			st.info("📚 System Information coming soon!")
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 2rem; border-radius: 15px; text-align: center; color: white; margin-bottom: 1rem;">
+			<div style="font-size: 3rem; margin-bottom: 1rem;">📊</div>
+			<h4 style="margin-bottom: 1rem; font-weight: 600;">Analytics Hub</h4>
+			<p style="margin-bottom: 1.5rem; opacity: 0.9;">Real-time compliance monitoring and advanced reporting dashboard</p>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		if st.button("📊 View Analytics", use_container_width=True, type="primary", key="home_analytics"):
+			if is_logged_in():
+				if has_permission(Permission.SYSTEM_SETTINGS):
+					navigate_to("admin_dashboard")
+				elif has_permission(Permission.VIEW_OWN_REPORTS):
+					navigate_to("student_dashboard")
+				else:
+					st.error("🚫 Access denied: Insufficient permissions for analytics")
+					st.info("Contact administrator for access")
+			else:
+				st.info("🔐 Please login to access analytics")
 	
-	st.markdown("---")
-	
-	# System features
-	st.markdown("### ✨ Key Features")
+	# Feature showcase
+	st.markdown("<br><br>", unsafe_allow_html=True)
+	st.markdown("""
+	<div style="margin: 2rem 0 1rem 0;">
+		<h3 style="color: #2c3e50; font-weight: 600; margin-bottom: 1rem;">✨ Enterprise Features</h3>
+	</div>
+	""", unsafe_allow_html=True)
 	
 	col1, col2 = st.columns(2)
 	
 	with col1:
 		st.markdown("""
-		**For Students:**
-		- 🔐 Face-based biometric authentication
-		- 📸 Real-time attire verification
-		- 📊 Personal compliance dashboard
-		- 📱 Easy registration process
-		""")
+		<div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+			<h4 style="color: #007bff; margin-bottom: 1rem;">🔐 Advanced Authentication</h4>
+			<ul style="color: #495057; line-height: 1.8;">
+				<li><strong>Multi-method Face Recognition</strong> - 30% confidence threshold with histogram correlation</li>
+				<li><strong>Emergency Login System</strong> - Backup username/password authentication</li>
+				<li><strong>Biometric Security</strong> - Encrypted face storage with unique hashing</li>
+				<li><strong>Real-time Verification</strong> - Instant face matching with quality analysis</li>
+			</ul>
+		</div>
+		""", unsafe_allow_html=True)
 	
 	with col2:
 		st.markdown("""
-		**For Administrators:**
-		- 👥 Student management
-		- 🏢 Department organization
-		- 📈 Compliance reports
-		- 🔔 Alert system
-		""")
+		<div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+			<h4 style="color: #28a745; margin-bottom: 1rem;">🎯 AI-Powered Analysis</h4>
+			<ul style="color: #495057; line-height: 1.8;">
+				<li><strong>Computer Vision Detection</strong> - HSV color analysis for uniform compliance</li>
+				<li><strong>Object Recognition</strong> - ID card and footwear detection</li>
+				<li><strong>Pose Estimation</strong> - MediaPipe integration for body region analysis</li>
+				<li><strong>Violation Tracking</strong> - Detailed compliance scoring and reporting</li>
+			</ul>
+		</div>
+		""", unsafe_allow_html=True)
+	
+	# Technology stack
+	st.markdown("<br><br>", unsafe_allow_html=True)
+	st.markdown("""
+	<div style="background: #f8f9fa; padding: 2rem; border-radius: 15px; text-align: center;">
+		<h4 style="color: #2c3e50; margin-bottom: 1rem;">🛠️ Powered by Enterprise Technology</h4>
+		<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 1rem; margin-top: 1rem;">
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">Python 3.11</span>
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">Streamlit</span>
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">OpenCV</span>
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">MediaPipe</span>
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">SQLite</span>
+			<span style="background: white; padding: 0.5rem 1rem; border-radius: 20px; color: #495057; font-weight: 500;">scikit-learn</span>
+		</div>
+	</div>
+	""", unsafe_allow_html=True)
 
 
 def render_student_portal():
-	"""Student portal - landing page for students"""
-	st.title("🎓 Student Portal")
-	st.markdown("---")
+	"""Enhanced student portal with modern enterprise UI"""
+	
+	# Modern header
+	st.markdown("""
+	<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px; text-align: center;">
+		<h1 style="color: white; font-size: 2.2rem; margin-bottom: 0.5rem; font-weight: 600;">🎓 Student Portal</h1>
+		<p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">Your gateway to attire verification and compliance tracking</p>
+	</div>
+	""", unsafe_allow_html=True)
 
 	# Check if user is already logged in
 	if is_logged_in():
 		user = st.session_state.get('user')
-		st.success(f"✅ Welcome back, {user.get('full_name', 'User')}!")
 		
-		st.markdown("### Quick Actions")
+		# Welcome back section
+		st.markdown(f"""
+		<div style="background: linear-gradient(135deg, #28a745, #20c997); padding: 1.5rem; border-radius: 15px; color: white; margin-bottom: 2rem; text-align: center;">
+			<h3 style="margin-bottom: 0.5rem;">✅ Welcome back, {user.get('full_name', 'User')[:25]}!</h3>
+			<p style="margin: 0; opacity: 0.9;">Logged in via {user.get('auth_method', 'Unknown').title()} Authentication</p>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		# Quick actions dashboard
+		st.markdown("""
+		<div style="margin: 2rem 0 1rem 0;">
+			<h3 style="color: #2c3e50; font-weight: 600;">⚡ Quick Actions</h3>
+		</div>
+		""", unsafe_allow_html=True)
+		
 		col1, col2, col3 = st.columns(3)
 		
 		with col1:
-			if is_student():
-				if st.button("📋 My Dashboard", use_container_width=True, type="primary"):
-					navigate_to("student_dashboard")
-			else:
-				if st.button("🎓 Verify Attire", use_container_width=True, type="primary"):
-					navigate_to("verification")
+			st.markdown("""
+			<div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; border-top: 4px solid #007bff;">
+				<div style="font-size: 2.5rem; color: #007bff; margin-bottom: 1rem;">📋</div>
+				<h4 style="color: #2c3e50; margin-bottom: 1rem;">My Dashboard</h4>
+				<p style="color: #6c757d; margin-bottom: 1.5rem;">View your compliance history, statistics, and verification reports</p>
+			</div>
+			""", unsafe_allow_html=True)
+			
+			if st.button("📋 Open Dashboard", use_container_width=True, type="primary", key="dashboard_btn"):
+				navigate_to("student_dashboard")
 		
 		with col2:
-			if st.button("👤 My Profile", use_container_width=True, key="profile_btn_portal"):
-				navigate_to("profile")
+			st.markdown("""
+			<div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; border-top: 4px solid #28a745;">
+				<div style="font-size: 2.5rem; color: #28a745; margin-bottom: 1rem;">🎓</div>
+				<h4 style="color: #2c3e50; margin-bottom: 1rem;">Verify Attire</h4>
+				<p style="color: #6c757d; margin-bottom: 1.5rem;">Real-time attire verification using AI-powered analysis</p>
+			</div>
+			""", unsafe_allow_html=True)
+			
+			if st.button("🎓 Start Verification", use_container_width=True, type="primary", key="verify_btn"):
+				navigate_to("verification")
 		
 		with col3:
-			if st.button("🚪 Logout", use_container_width=True, key="logout_btn_portal"):
+			st.markdown("""
+			<div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; border-top: 4px solid #ffc107;">
+				<div style="font-size: 2.5rem; color: #ffc107; margin-bottom: 1rem;">👤</div>
+				<h4 style="color: #2c3e50; margin-bottom: 1rem;">My Profile</h4>
+				<p style="color: #6c757d; margin-bottom: 1.5rem;">Manage your personal information and account settings</p>
+			</div>
+			""", unsafe_allow_html=True)
+			
+			if st.button("👤 View Profile", use_container_width=True, type="primary", key="profile_btn_portal"):
+				navigate_to("profile")
+		
+		# Additional actions
+		st.markdown("<br>", unsafe_allow_html=True)
+		col1, col2 = st.columns([3, 1])
+		with col2:
+			if st.button("🚪 Logout", use_container_width=True, type="secondary", key="logout_btn_portal"):
 				logout_and_redirect()
+	
 	else:
+		# Login/Register section for non-authenticated users
 		st.markdown("""
-		### Welcome to Student Portal!
-
-		Are you a new student or an existing user?
-		""")
+		<div style="text-align: center; margin: 2rem 0;">
+			<h3 style="color: #2c3e50; font-weight: 600;">Welcome to Student Portal!</h3>
+			<p style="color: #6c757d; font-size: 1.1rem;">Choose your path to get started</p>
+		</div>
+		""", unsafe_allow_html=True)
 
 		col1, col2 = st.columns(2)
 
 		with col1:
-			st.markdown("#### 📝 New Student")
-			st.write("Create your account and register your face for biometric authentication")
-			if st.button("Register Now", use_container_width=True, type="primary", key="portal_register"):
+			st.markdown("""
+			<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2.5rem; border-radius: 20px; text-align: center; color: white; margin-bottom: 1rem;">
+				<div style="font-size: 4rem; margin-bottom: 1rem;">📝</div>
+				<h3 style="margin-bottom: 1rem; font-weight: 600;">New Student</h3>
+				<p style="margin-bottom: 1.5rem; opacity: 0.9; line-height: 1.6;">
+					Create your account with our 4-stage registration process including biometric face authentication
+				</p>
+				<div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 10px; margin-bottom: 1rem;">
+					<div style="font-size: 0.9rem; font-weight: 500;">✨ What you'll get:</div>
+					<div style="font-size: 0.8rem; opacity: 0.9; margin-top: 0.5rem;">
+						• Secure face authentication<br>
+						• Personal compliance dashboard<br>
+						• Real-time verification system
+					</div>
+				</div>
+			</div>
+			""", unsafe_allow_html=True)
+			
+			if st.button("📝 Start Registration", use_container_width=True, type="primary", key="portal_register"):
 				navigate_to('register')
 
 		with col2:
-			st.markdown("#### 🔐 Existing Student")
-			st.write("Login using face authentication or emergency credentials")
-			if st.button("Login Now", use_container_width=True, type="primary", key="portal_login"):
+			st.markdown("""
+			<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 2.5rem; border-radius: 20px; text-align: center; color: white; margin-bottom: 1rem;">
+				<div style="font-size: 4rem; margin-bottom: 1rem;">🔐</div>
+				<h3 style="margin-bottom: 1rem; font-weight: 600;">Existing Student</h3>
+				<p style="margin-bottom: 1.5rem; opacity: 0.9; line-height: 1.6;">
+					Login using advanced face authentication or emergency credentials for instant access
+				</p>
+				<div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 10px; margin-bottom: 1rem;">
+					<div style="font-size: 0.9rem; font-weight: 500;">🚀 Login options:</div>
+					<div style="font-size: 0.8rem; opacity: 0.9; margin-top: 0.5rem;">
+						• Face biometric authentication<br>
+						• Emergency login (ID + Password)<br>
+						• Quality analysis & bypass options
+					</div>
+				</div>
+			</div>
+			""", unsafe_allow_html=True)
+			
+			if st.button("🔐 Login Now", use_container_width=True, type="primary", key="portal_login"):
 				navigate_to('face_auth')
 
-		st.markdown("---")
+		# Process flow
+		st.markdown("<br><br>", unsafe_allow_html=True)
+		st.markdown("""
+		<div style="background: #f8f9fa; padding: 2rem; border-radius: 15px;">
+			<h4 style="color: #2c3e50; text-align: center; margin-bottom: 2rem;">📋 How It Works</h4>
+			<div style="display: flex; justify-content: space-around; flex-wrap: wrap; gap: 1rem;">
+				<div style="text-align: center; flex: 1; min-width: 200px;">
+					<div style="background: #007bff; color: white; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem; font-weight: bold;">1</div>
+					<h5 style="color: #2c3e50; margin-bottom: 0.5rem;">Register/Login</h5>
+					<p style="color: #6c757d; font-size: 0.9rem;">Create account or authenticate with face/credentials</p>
+				</div>
+				<div style="text-align: center; flex: 1; min-width: 200px;">
+					<div style="background: #28a745; color: white; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem; font-weight: bold;">2</div>
+					<h5 style="color: #2c3e50; margin-bottom: 0.5rem;">Verify Attire</h5>
+					<p style="color: #6c757d; font-size: 0.9rem;">Upload photo or use camera for AI analysis</p>
+				</div>
+				<div style="text-align: center; flex: 1; min-width: 200px;">
+					<div style="background: #ffc107; color: white; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem; font-weight: bold;">3</div>
+					<h5 style="color: #2c3e50; margin-bottom: 0.5rem;">Get Results</h5>
+					<p style="color: #6c757d; font-size: 0.9rem;">Instant compliance report with detailed analysis</p>
+				</div>
+				<div style="text-align: center; flex: 1; min-width: 200px;">
+					<div style="background: #17a2b8; color: white; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1rem; font-weight: bold;">4</div>
+					<h5 style="color: #2c3e50; margin-bottom: 0.5rem;">Track Progress</h5>
+					<p style="color: #6c757d; font-size: 0.9rem;">Monitor compliance history and statistics</p>
+				</div>
+			</div>
+		</div>
+		""", unsafe_allow_html=True)
 		
-		# Additional info
-		with st.expander("ℹ️ How to get started", expanded=False):
-			st.markdown("""
-			**For New Students:**
-			1. Click "Register Now"
-			2. Fill in your details
-			3. Capture your face photo
-			4. Complete registration
-			
-			**For Existing Students:**
-			1. Click "Login Now"
-			2. Use face authentication
-			3. Access your dashboard
-			4. Verify your attire
-			""")
-		
-		st.caption("💡 Tip: Make sure you have good lighting for face authentication")
+		# Tips section
+		with st.expander("💡 Pro Tips for Best Experience", expanded=False):
+			col1, col2 = st.columns(2)
+			with col1:
+				st.markdown("""
+				**🔐 Face Authentication Tips:**
+				- Ensure good lighting (natural light preferred)
+				- Position face in center of camera
+				- Remove sunglasses and hats
+				- Hold device steady during capture
+				- Use emergency login if face auth fails
+				""")
+			with col2:
+				st.markdown("""
+				**📸 Attire Verification Tips:**
+				- Capture full-body image when possible
+				- Stand against plain background
+				- Ensure uniform is clearly visible
+				- Good lighting improves accuracy
+				- Multiple angles can help verification
+				""")
 
 
 def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
@@ -410,12 +633,27 @@ def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Di
 	}
 
 
+@require_student_or_admin
 def render_image_tab():
+	"""Image verification tab - RBAC Protected"""
 	st.subheader("Single Image")
+	
+	# RBAC: Check permissions for verification
+	if not has_permission(Permission.SELF_VERIFICATION):
+		show_permission_denied_message(required_permission="self_verification")
+		return
+	
 	# Pre-fill student id when user is logged in (roll_no or id)
 	_user = st.session_state.get('user') or {}
 	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
-	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_image")
+	
+	# RBAC: Students can only verify themselves, admins can verify anyone
+	if is_student():
+		student_id = prefill_id  # Force student to use their own ID
+		st.info(f"🔒 **Student Mode:** Verifying as {prefill_id}")
+		st.text_input("Your Student ID", value=prefill_id, disabled=True, key="student_id_image_display")
+	else:
+		student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_image")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_image")
 	upload = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"], key="upload_image")
 	if upload is not None:
@@ -546,11 +784,26 @@ def render_image_tab():
 					st.info("No student ID provided for report")
 
 
+@require_student_or_admin
 def render_webcam_tab():
+	"""Webcam verification tab - RBAC Protected"""
 	st.subheader("Webcam")
+	
+	# RBAC: Check permissions for verification
+	if not has_permission(Permission.SELF_VERIFICATION):
+		show_permission_denied_message(required_permission="self_verification")
+		return
+	
 	_user = st.session_state.get('user') or {}
 	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
-	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_webcam")
+	
+	# RBAC: Students can only verify themselves, admins can verify anyone
+	if is_student():
+		student_id = prefill_id  # Force student to use their own ID
+		st.info(f"🔒 **Student Mode:** Verifying as {prefill_id}")
+		st.text_input("Your Student ID", value=prefill_id, disabled=True, key="student_id_webcam_display")
+	else:
+		student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_webcam")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_webcam")
 	st.info("Use the camera to capture a frame.")
 	cam = st.camera_input("Capture a frame", key="cam_webcam")
@@ -634,11 +887,26 @@ def render_webcam_tab():
 					st.info("No student ID provided for report")
 
 
+@require_student_or_admin
 def render_video_tab():
+	"""Video verification tab - RBAC Protected"""
 	st.subheader("Video")
+	
+	# RBAC: Check permissions for verification
+	if not has_permission(Permission.SELF_VERIFICATION):
+		show_permission_denied_message(required_permission="self_verification")
+		return
+	
 	_user = st.session_state.get('user') or {}
 	prefill_id = _user.get('roll_no') or _user.get('student_id') or _user.get('id') or ""
-	student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_video")
+	
+	# RBAC: Students can only verify themselves, admins can verify anyone
+	if is_student():
+		student_id = prefill_id  # Force student to use their own ID
+		st.info(f"🔒 **Student Mode:** Verifying as {prefill_id}")
+		st.text_input("Your Student ID", value=prefill_id, disabled=True, key="student_id_video_display")
+	else:
+		student_id = st.text_input("Student ID / RFID (optional)", value=prefill_id, key="student_id_video")
 	zone = st.selectbox("Zone", st.session_state.config.zones, index=0, key="zone_video")
 	video = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"], key="upload_video")
 	if video is None:
@@ -724,9 +992,26 @@ def render_dataset_tab():
 
 
 
+@require_student_or_admin
 def render_student_verification():
-	st.title("Student Verification")
-	tabs = st.tabs(["Image", "Webcam", "Video"])
+	"""Student verification hub - RBAC Protected"""
+	# RBAC: Check permissions for verification
+	if not has_permission(Permission.SELF_VERIFICATION):
+		show_permission_denied_message(required_permission="self_verification")
+		return
+	
+	# Modern header with role indication
+	user = st.session_state.get('user', {})
+	role_indicator = "👨‍💼 Admin Mode" if is_admin() else "🎓 Student Mode"
+	
+	st.markdown(f"""
+	<div style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); padding: 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px; text-align: center;">
+		<h1 style="color: white; font-size: 2.2rem; margin-bottom: 0.5rem; font-weight: 600;">🎓 Attire Verification</h1>
+		<p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">{role_indicator} - AI-Powered Compliance Analysis</p>
+	</div>
+	""", unsafe_allow_html=True)
+	
+	tabs = st.tabs(["📤 Upload Image", "📷 Live Camera", "🎥 Video Analysis"])
 	with tabs[0]:
 		render_image_tab()
 	with tabs[1]:
@@ -735,8 +1020,17 @@ def render_student_verification():
 		render_video_tab()
 
 
+@require_admin
 def render_admin_tab():
-	st.title("Admin Dashboard")
+	"""Admin Dashboard - Protected by RBAC"""
+	log_access_attempt("admin_dashboard", "admin_role", True)
+	
+	st.markdown("""
+	<div style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px; text-align: center;">
+		<h1 style="color: white; font-size: 2.2rem; margin-bottom: 0.5rem; font-weight: 600;">👨‍💼 Admin Dashboard</h1>
+		<p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">🔒 Secure Administrative Control Panel</p>
+	</div>
+	""", unsafe_allow_html=True)
 	
 	# Get compliance stats
 	stats = get_compliance_stats(cfg=st.session_state.config)
@@ -764,8 +1058,14 @@ def render_admin_tab():
 	])
 	
 	with tab1:
+		# RBAC: Check if user can manage students
+		if not can_manage_students():
+			show_permission_denied_message(required_permission="manage_students")
+			return
+		
 		students = get_all_students(cfg=st.session_state.config)
 		st.subheader("All Students")
+		st.info("🔒 **Admin Only** - Student management requires administrative privileges")
 		if students:
 			# Enrich students with aggregated verification stats
 			from src.db import get_student_stats
@@ -814,9 +1114,11 @@ def render_admin_tab():
 			
 			st.markdown("---")
 			
-			# Delete student section
-			st.markdown("#### 🗑️ Delete Student")
-			st.warning("⚠️ **Warning:** Deleting a student will permanently remove all their data including events, face images, and login credentials.")
+			# Delete student section - Extra RBAC check
+			if can_delete_data():
+				st.markdown("#### 🗑️ Delete Student")
+				st.error("⚠️ **DANGER ZONE:** Deleting a student will permanently remove all their data including events, face images, and login credentials.")
+				st.warning("🔒 **Admin Only** - Data deletion requires highest level administrative privileges")
 			
 			col1, col2 = st.columns([3, 1])
 			with col1:
@@ -849,6 +1151,11 @@ def render_admin_tab():
 				col1, col2, col3 = st.columns([1, 1, 2])
 				with col1:
 					if st.button("✅ Yes, Delete", type="primary", use_container_width=True):
+						# Final RBAC check before deletion
+						if not can_delete_data():
+							st.error("🚫 Access denied: You don't have permission to delete student data")
+							return
+						
 						from src.db import delete_student
 						success, message = delete_student(st.session_state['confirm_delete_student'], cfg=st.session_state.config)
 						
@@ -875,11 +1182,19 @@ def render_admin_tab():
 						del st.session_state['confirm_delete_student']
 						del st.session_state['confirm_delete_name']
 						st.rerun()
+			else:
+				st.info("🔒 **Delete functionality restricted** - You don't have permission to delete student data")
 		else:
 			st.info("No students in database")
 	
 	with tab2:
+		# RBAC: Check if user can view all reports
+		if not can_view_all_reports():
+			show_permission_denied_message(required_permission="view_all_reports")
+			return
+		
 		st.subheader("Daily Compliance Report")
+		st.info("🔒 **Admin Only** - System-wide reports require administrative privileges")
 		compliance_df = pd.DataFrame([stats])
 		st.dataframe(compliance_df)
 		
@@ -888,7 +1203,13 @@ def render_admin_tab():
 		st.download_button("Download Compliance Report", csv, "compliance_report.csv", "text/csv")
 	
 	with tab3:
+		# RBAC: Check if user can manage students
+		if not can_manage_students():
+			show_permission_denied_message(required_permission="manage_students")
+			return
+		
 		st.subheader("Add/Update Student")
+		st.info("🔒 **Admin Only** - Adding students requires administrative privileges")
 
 		# Get existing departments for selection
 		from src.db import get_all_departments
@@ -1001,9 +1322,13 @@ def render_admin_tab():
 		render_departments_tab()
 
 
+@require_permission(Permission.MANAGE_DEPARTMENTS)
 def render_add_department_tab():
-	"""Render the Add Department form"""
+	"""Render the Add Department form - Admin only"""
 	st.subheader("➕ Create New Department")
+	
+	# RBAC Security Notice
+	st.info("🔒 **Admin Only Feature** - Department management requires administrative privileges")
 
 	with st.form("add_department_form"):
 		col1, col2 = st.columns(2)
@@ -1057,9 +1382,13 @@ def render_add_department_tab():
 			st.error(f"❌ Error: {message}")
 
 
+@require_permission(Permission.MANAGE_DEPARTMENTS)
 def render_departments_tab():
-	"""Render the Departments management view"""
+	"""Render the Departments management view - Admin only"""
 	st.subheader("📊 Departments Management")
+	
+	# RBAC Security Notice
+	st.info("🔒 **Admin Only Feature** - Department management requires administrative privileges")
 	
 	from src.db import get_all_departments, get_department_statistics, update_department, delete_department, search_departments, export_department_report
 	
@@ -1461,67 +1790,125 @@ def render_reports_downloads():
 
 
 def show_sidebar_navigation() -> None:
-	"""Professional sidebar navigation with role-based menu"""
-	st.sidebar.title("🏫 Navigation")
+	"""Enterprise-grade sidebar navigation with advanced UI"""
+	# Modern header with branding
+	st.sidebar.markdown("""
+	<div style="text-align: center; padding: 1rem 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: -1rem -1rem 1rem -1rem; border-radius: 0 0 10px 10px;">
+		<h2 style="color: white; margin: 0; font-weight: 600;">🏫 SAVS</h2>
+		<p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.8rem;">Student Attire Verification</p>
+	</div>
+	""", unsafe_allow_html=True)
 	
 	user = st.session_state.get('user')
 	current_page = get_current_page()
 	
-	# Show user info if logged in
+	# User profile card
+	if user:
+		st.sidebar.markdown("""
+		<div style="background: #f8f9fa; padding: 1rem; border-radius: 10px; margin-bottom: 1rem; border-left: 4px solid #007bff;">
+			<div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+				<div style="width: 40px; height: 40px; background: linear-gradient(135deg, #007bff, #0056b3); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-right: 0.75rem;">
+					<span style="color: white; font-weight: bold; font-size: 1.2rem;">👤</span>
+				</div>
+				<div>
+					<div style="font-weight: 600; color: #2c3e50; font-size: 0.9rem;">""" + user.get('full_name', 'User')[:20] + """</div>
+					<div style="color: #6c757d; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">""" + user.get('role', 'N/A').title() + """</div>
+				</div>
+			</div>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		# Status indicators
+		auth_method = user.get('auth_method', 'unknown')
+		auth_color = "#28a745" if auth_method == "face" else "#ffc107" if auth_method == "emergency" else "#6c757d"
+		st.sidebar.markdown(f"""
+		<div style="display: flex; justify-content: space-between; margin-bottom: 1rem; font-size: 0.75rem;">
+			<span style="color: {auth_color};">● {auth_method.title()} Auth</span>
+			<span style="color: #6c757d;">Online</span>
+		</div>
+		""", unsafe_allow_html=True)
+	
+	# Navigation sections with RBAC-based filtering
+	nav_sections = filter_navigation_by_role()
+	
+	# Render navigation sections
+	for section_name, items in nav_sections:
+		st.sidebar.markdown(f"""
+		<div style="margin: 1.5rem 0 0.5rem 0; font-weight: 600; color: #495057; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px;">
+			{section_name}
+		</div>
+		""", unsafe_allow_html=True)
+		
+		for label, page_id, icon in items:
+			is_active = current_page == page_id
+			button_style = """
+			background: linear-gradient(135deg, #007bff, #0056b3); 
+			color: white; 
+			border: none; 
+			box-shadow: 0 2px 4px rgba(0,123,255,0.3);
+			""" if is_active else """
+			background: white; 
+			color: #495057; 
+			border: 1px solid #dee2e6;
+			"""
+			
+			hover_style = "transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.1);" if not is_active else ""
+			
+			if st.sidebar.button(
+				label, 
+				key=f"nav_{page_id}", 
+				use_container_width=True,
+				help=f"Navigate to {label}"
+			):
+				navigate_to(page_id)
+	
+	# Action buttons
 	if user:
 		st.sidebar.markdown("---")
-		st.sidebar.markdown(f"**👤 {user.get('full_name', 'User')}**")
-		st.sidebar.caption(f"Role: {user.get('role', 'N/A').title()}")
-		st.sidebar.markdown("---")
+		st.sidebar.markdown("""
+		<div style="margin: 1rem 0 0.5rem 0; font-weight: 600; color: #495057; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px;">
+			⚡ Quick Actions
+		</div>
+		""", unsafe_allow_html=True)
+		
+		col1, col2 = st.sidebar.columns(2)
+		with col1:
+			if st.button("🔄 Refresh", use_container_width=True, help="Refresh current page"):
+				st.rerun()
+		with col2:
+			if st.button("🚪 Logout", use_container_width=True, type="secondary", help="Logout securely"):
+				logout_and_redirect()
 	
-	# Build navigation menu based on role
-	if not user:
-		# Guest menu - Simple 3-button navigation
-		menu_items = [
-			("🏠 Home", "home"),
-			("🎓 Student", "student_portal"),
-			("👨‍💼 Admin", "admin_login"),
-		]
-	elif is_admin():
-		# Admin menu
-		menu_items = [
-			("🏠 Home", "home"),
-			("🎓 Student Portal", "student_portal"),
-			("📊 Admin Dashboard", "admin_dashboard"),
-			("🎓 Verification", "verification"),
-			("👤 Profile", "profile"),
-		]
-	elif is_student():
-		# Student menu
-		menu_items = [
-			("🏠 Home", "home"),
-			("🎓 Student Portal", "student_portal"),
-			("📋 My Dashboard", "student_dashboard"),
-			("👤 Profile", "profile"),
-		]
-	else:
-		# Default menu
-		menu_items = [
-			("🏠 Home", "home"),
-			("🎓 Student", "student_portal"),
-			("👨‍💼 Admin", "admin_login"),
-		]
-	
-	# Display navigation buttons
-	for label, page_id in menu_items:
-		button_type = "primary" if current_page == page_id else "secondary"
-		if st.sidebar.button(label, key=f"nav_{page_id}", use_container_width=True, type=button_type):
-			navigate_to(page_id)
-	
-	# Logout button for logged-in users
-	if user:
-		st.sidebar.markdown("---")
-		if st.sidebar.button("🚪 Logout", use_container_width=True, type="secondary"):
-			logout_and_redirect()
-	
-	# Settings for admin
+	# Settings for admin (collapsible)
 	if is_admin():
-		sidebar_settings()
+		with st.sidebar.expander("⚙️ System Settings", expanded=False):
+			sidebar_settings()
+	
+	# Footer with system info and security status
+	st.sidebar.markdown("---")
+	
+	# Security status indicator
+	user_role = get_user_role().value if get_current_user() else "guest"
+	role_color = {
+		"admin": "#dc3545",
+		"teacher": "#007bff", 
+		"security_staff": "#ffc107",
+		"student": "#28a745",
+		"guest": "#6c757d"
+	}.get(user_role, "#6c757d")
+	
+	st.sidebar.markdown(f"""
+	<div style="text-align: center; color: #6c757d; font-size: 0.7rem; margin-top: 2rem;">
+		<div>SAVS v2.0 Enterprise</div>
+		<div>© 2024 RBAC Secured</div>
+		<div style="margin-top: 0.5rem;">
+			<span style="color: #28a745;">●</span> System Online
+		</div>
+		<div style="margin-top: 0.5rem; padding: 0.25rem; background: rgba(0,0,0,0.05); border-radius: 4px;">
+			<span style="color: {role_color};">🔒</span> {user_role.title()} Mode
+		</div>
+	</div>
+	""", unsafe_allow_html=True)
 
 
 def main():
@@ -1529,6 +1916,12 @@ def main():
 	ensure_dirs()
 	init_session_state()
 	init_db()
+	
+	# Security: Initialize RBAC logging
+	import logging
+	logging.basicConfig(level=logging.INFO)
+	rbac_logger = logging.getLogger('rbac_audit')
+	rbac_logger.info("SAVS System started with RBAC enabled")
 
 	# Handle legacy redirect flags (backward compatibility)
 	if st.session_state.get('show_verification'):
@@ -1575,21 +1968,52 @@ def main():
 		# Registration redirects to face_auth automatically
 	
 	elif current_page == "student_dashboard":
-		if not is_logged_in():
-			st.warning("🔒 Please login first to access your dashboard")
-			if st.button("🔐 Go to Login"):
-				navigate_to("face_auth")
+		# RBAC: Student dashboard requires login and self-verification permission
+		if not has_permission(Permission.VIEW_OWN_REPORTS):
+			log_access_attempt("student_dashboard", "student_access", False)
+			show_permission_denied_message(required_permission="view_own_reports")
 		else:
 			show_student_dashboard(st.session_state.config)
 	
 	elif current_page == "verification":
-		render_student_verification()
+		# RBAC: Verification requires self-verification permission
+		if not has_permission(Permission.SELF_VERIFICATION):
+			log_access_attempt("verification", "self_verification", False)
+			show_permission_denied_message(required_permission="self_verification")
+		else:
+			render_student_verification()
 	
 	elif current_page == "admin_login":
-		st.title("👨‍💼 Admin Login")
+		st.markdown("""
+		<div style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); padding: 2rem; margin: -1rem -1rem 2rem -1rem; border-radius: 0 0 20px 20px; text-align: center;">
+			<h1 style="color: white; font-size: 2.2rem; margin-bottom: 0.5rem; font-weight: 600;">👨‍💼 Admin Access</h1>
+			<p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">🔒 Secure Administrative Authentication</p>
+		</div>
+		""", unsafe_allow_html=True)
+		
+		st.error("🔒 **RESTRICTED AREA** - Administrator Access Only")
+		st.warning("⚠️ This area contains sensitive system management functions.")
+		st.info("💡 Please enter valid administrator credentials to continue.")
+		
+		# Security notice
+		with st.expander("🛡️ Security Information", expanded=False):
+			st.markdown("""
+			**Admin Access Includes:**
+			- 👥 Complete student management (add, edit, delete)
+			- 🏢 Department and class administration  
+			- 📊 System-wide analytics and reporting
+			- ⚙️ Configuration and policy settings
+			- 🗑️ Data deletion capabilities
+			- 📥 Export and backup functions
+			
+			**Security Features:**
+			- 🔐 Role-based access control (RBAC)
+			- 📝 Audit logging of all actions
+			- 🚫 Automatic permission validation
+			- 🔄 Session timeout protection
+			""")
+		
 		st.markdown("---")
-		st.warning("🔒 This area requires administrator access.")
-		st.info("Please enter admin credentials to continue.")
 
 		with st.form("admin_login_form"):
 			admin_username = st.text_input("Username")
@@ -1610,16 +2034,18 @@ def main():
 				st.error("❌ Invalid admin credentials")
 	
 	elif current_page == "admin_dashboard":
-		if not is_admin():
-			navigate_to("admin_login")
+		# RBAC: Admin dashboard requires admin permissions
+		if not has_permission(Permission.SYSTEM_SETTINGS):
+			log_access_attempt("admin_dashboard", "admin_role", False)
+			show_permission_denied_message(required_role="admin")
 		else:
 			render_admin_tab()
 	
 	elif current_page == "profile":
-		if not is_logged_in():
-			st.warning("🔒 Please login first to access your profile")
-			if st.button("🔐 Go to Login"):
-				navigate_to("face_auth")
+		# RBAC: Profile requires login and view own profile permission
+		if not has_permission(Permission.VIEW_OWN_PROFILE):
+			log_access_attempt("profile", "view_own_profile", False)
+			show_permission_denied_message(required_permission="view_own_profile")
 		else:
 			user = st.session_state.get('user')
 			st.title("👤 My Profile")

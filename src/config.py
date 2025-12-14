@@ -11,8 +11,8 @@ class AppConfig:
 
 	# Model and features
 	hist_bins: int = 24
-	confidence_threshold: float = 0.3  # Lowered to 0.3 (30%) for better face matching
-	enable_rules: bool = False  # Disabled rule-based color checks
+	confidence_threshold: float = 0.55  # Balanced threshold for realistic verification
+	enable_rules: bool = True  # Enable rule-based color checks for realistic verification
 	enable_model: bool = True
 	max_video_fps: int = 10
 
@@ -20,10 +20,10 @@ class AppConfig:
 	current_label: str = "compliant"
 	save_frames: bool = False  # Save frames to dataset during verification
 
-	# ID Card detection - DISABLED BY DEFAULT (focus on dress code only)
-	enable_id_card_detection: bool = False
-	id_card_required: bool = False
-	id_card_confidence_threshold: float = 0.6
+	# ID Card detection - ENABLED for professional verification
+	enable_id_card_detection: bool = True
+	id_card_required: bool = True
+	id_card_confidence_threshold: float = 0.4  # Realistic threshold for ID card detection
 
 	# Policy profiles
 	policy_profile: str = "regular"  # regular, sports, lab
@@ -34,8 +34,8 @@ class AppConfig:
 	require_kurti_dupatta_for_female: bool = True
 	require_footwear_male: bool = True
 	require_footwear_female: bool = False  # sandals or shoes acceptable; not mandatory
-	require_black_shoes_male: bool = False  # Allow any color shoes (focus on formal attire, not color)
-	allow_any_color_pants_male: bool = True  # Allow any color pants for males (focus on formal attire, not color)
+	require_black_shoes_male: bool = True  # Require black shoes for professional appearance
+	allow_any_color_pants_male: bool = False  # Require dark pants for formal dress code
 	
 	# Security & Safety Features
 	enable_unauthorized_entry_alerts: bool = True
