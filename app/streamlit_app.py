@@ -175,6 +175,69 @@ def render_home():
 	st.title("🏫 Student Attire Verification System")
 	st.markdown("---")
 
+	# Welcome message
+	st.markdown("""
+	### Welcome to the Student Attire Verification System
+	
+	This system helps ensure compliance with dress code and safety regulations across campus.
+	""")
+	
+	st.markdown("---")
+	
+	# Quick access cards
+	st.markdown("### 🚀 Quick Access")
+	
+	col1, col2, col3 = st.columns(3)
+	
+	with col1:
+		st.markdown("#### 🎓 Students")
+		st.write("Login, register, and verify your attire compliance")
+		if st.button("Go to Student Portal", use_container_width=True, type="primary", key="home_student"):
+			navigate_to("student_portal")
+	
+	with col2:
+		st.markdown("#### 👨‍💼 Admin")
+		st.write("Manage students, departments, and view reports")
+		if st.button("Go to Admin Portal", use_container_width=True, type="primary", key="home_admin"):
+			navigate_to("admin_login")
+	
+	with col3:
+		st.markdown("#### ℹ️ About")
+		st.write("Learn more about the system and features")
+		if st.button("View Information", use_container_width=True, key="home_info"):
+			st.info("📚 System Information coming soon!")
+	
+	st.markdown("---")
+	
+	# System features
+	st.markdown("### ✨ Key Features")
+	
+	col1, col2 = st.columns(2)
+	
+	with col1:
+		st.markdown("""
+		**For Students:**
+		- 🔐 Face-based biometric authentication
+		- 📸 Real-time attire verification
+		- 📊 Personal compliance dashboard
+		- 📱 Easy registration process
+		""")
+	
+	with col2:
+		st.markdown("""
+		**For Administrators:**
+		- 👥 Student management
+		- 🏢 Department organization
+		- 📈 Compliance reports
+		- 🔔 Alert system
+		""")
+
+
+def render_student_portal():
+	"""Student portal - landing page for students"""
+	st.title("🎓 Student Portal")
+	st.markdown("---")
+
 	# Check if user is already logged in
 	if is_logged_in():
 		user = st.session_state.get('user')
@@ -187,23 +250,20 @@ def render_home():
 			if is_student():
 				if st.button("📋 My Dashboard", use_container_width=True, type="primary"):
 					navigate_to("student_dashboard")
-			elif is_admin():
-				if st.button("📊 Admin Dashboard", use_container_width=True, type="primary"):
-					navigate_to("admin_dashboard")
 			else:
 				if st.button("🎓 Verify Attire", use_container_width=True, type="primary"):
 					navigate_to("verification")
 		
 		with col2:
-			if st.button("👤 My Profile", use_container_width=True, key="profile_btn_1"):
+			if st.button("👤 My Profile", use_container_width=True, key="profile_btn_portal"):
 				navigate_to("profile")
 		
 		with col3:
-			if st.button("🚪 Logout", use_container_width=True, key="logout_btn"):
+			if st.button("🚪 Logout", use_container_width=True, key="logout_btn_portal"):
 				logout_and_redirect()
 	else:
 		st.markdown("""
-		### Welcome!
+		### Welcome to Student Portal!
 
 		Are you a new student or an existing user?
 		""")
@@ -211,15 +271,36 @@ def render_home():
 		col1, col2 = st.columns(2)
 
 		with col1:
-			if st.button("📝 Register (New Student)", use_container_width=True, type="primary"):
+			st.markdown("#### 📝 New Student")
+			st.write("Create your account and register your face for biometric authentication")
+			if st.button("Register Now", use_container_width=True, type="primary", key="portal_register"):
 				navigate_to('register')
 
 		with col2:
-			if st.button("🔐 Login (Existing User)", use_container_width=True, type="primary"):
+			st.markdown("#### 🔐 Existing Student")
+			st.write("Login using face authentication or emergency credentials")
+			if st.button("Login Now", use_container_width=True, type="primary", key="portal_login"):
 				navigate_to('face_auth')
 
 		st.markdown("---")
-		st.caption("Select your option above to proceed.")
+		
+		# Additional info
+		with st.expander("ℹ️ How to get started", expanded=False):
+			st.markdown("""
+			**For New Students:**
+			1. Click "Register Now"
+			2. Fill in your details
+			3. Capture your face photo
+			4. Complete registration
+			
+			**For Existing Students:**
+			1. Click "Login Now"
+			2. Use face authentication
+			3. Access your dashboard
+			4. Verify your attire
+			""")
+		
+		st.caption("💡 Tip: Make sure you have good lighting for face authentication")
 
 
 def show_id_card_popup(violations: List[Dict[str, Any]]) -> bool:
@@ -1395,25 +1476,26 @@ def show_sidebar_navigation() -> None:
 	
 	# Build navigation menu based on role
 	if not user:
-		# Guest menu
+		# Guest menu - Simple 3-button navigation
 		menu_items = [
 			("🏠 Home", "home"),
-			("🔐 Face Login", "face_auth"),
-			("📝 Register", "register"),
-			("👨‍💼 Admin Login", "admin_login"),
+			("🎓 Student", "student_portal"),
+			("👨‍💼 Admin", "admin_login"),
 		]
 	elif is_admin():
 		# Admin menu
 		menu_items = [
 			("🏠 Home", "home"),
-			("🎓 Verification", "verification"),
+			("🎓 Student Portal", "student_portal"),
 			("📊 Admin Dashboard", "admin_dashboard"),
+			("🎓 Verification", "verification"),
 			("👤 Profile", "profile"),
 		]
 	elif is_student():
 		# Student menu
 		menu_items = [
 			("🏠 Home", "home"),
+			("🎓 Student Portal", "student_portal"),
 			("📋 My Dashboard", "student_dashboard"),
 			("👤 Profile", "profile"),
 		]
@@ -1421,7 +1503,8 @@ def show_sidebar_navigation() -> None:
 		# Default menu
 		menu_items = [
 			("🏠 Home", "home"),
-			("🔐 Face Login", "face_auth"),
+			("🎓 Student", "student_portal"),
+			("👨‍💼 Admin", "admin_login"),
 		]
 	
 	# Display navigation buttons
@@ -1473,13 +1556,24 @@ def main():
 	if current_page == "home":
 		render_home()
 	
+	elif current_page == "student_portal":
+		render_student_portal()
+	
 	elif current_page == "face_auth":
+		# Check for redirect flag from face authentication
+		if st.session_state.get('redirect_to_verification'):
+			del st.session_state['redirect_to_verification']
+			navigate_to('verification')
+			return
+		
 		user = show_face_authentication(st.session_state.config)
 		if user:
 			st.session_state['user'] = user
 			# Redirect based on role after successful login
 			if is_admin():
 				navigate_to('admin_dashboard')
+			elif is_student():
+				navigate_to('verification')
 			else:
 				navigate_to('student_dashboard')
 	

@@ -223,17 +223,41 @@ def extract_features_from_image(bgr_image: np.ndarray, pose_landmarks=None, bins
 	total_edge_pixels = edges.shape[0] * edges.shape[1]
 	features["edge_density"] = float(np.sum(edges > 0) / total_edge_pixels) if total_edge_pixels > 0 else 0.0
 	
-	# ID Card detection
+	# Enhanced object detection (shoes, ID card, chain)
 	try:
-		from .id_card_detector import detect_id_card
-		id_card_result = detect_id_card(bgr_image)
-		features["id_card_detected"] = float(id_card_result["detected"])
-		features["id_card_confidence"] = float(id_card_result["confidence"])
-		features["id_card_area"] = float(id_card_result["area"])
+		from .object_detectors import detect_all_objects
+		object_results = detect_all_objects(bgr_image, pose_landmarks)
+		
+		# Shoe detection results
+		shoe_result = object_results.get('shoes', {})
+		features["shoes_detected"] = float(shoe_result.get('detected', False))
+		features["shoes_is_black"] = float(shoe_result.get('is_black', False))
+		features["shoes_confidence"] = float(shoe_result.get('confidence', 0.0))
+		features["shoes_saturation"] = float(shoe_result.get('avg_saturation', 0.0))
+		
+		# ID Card detection results
+		id_card_result = object_results.get('id_card', {})
+		features["id_card_detected"] = float(id_card_result.get('detected', False))
+		features["id_card_confidence"] = float(id_card_result.get('confidence', 0.0))
+		features["id_card_area"] = float(id_card_result.get('area', 0))
+		
+		# Chain/Lanyard detection results
+		chain_result = object_results.get('chain', {})
+		features["chain_detected"] = float(chain_result.get('detected', False))
+		features["chain_confidence"] = float(chain_result.get('confidence', 0.0))
+		features["chain_line_count"] = float(chain_result.get('line_count', 0))
+		
 	except ImportError:
-		# Fallback if id_card_detector is not available
+		# Fallback if object_detectors is not available
+		features["shoes_detected"] = 0.0
+		features["shoes_is_black"] = 0.0
+		features["shoes_confidence"] = 0.0
+		features["shoes_saturation"] = 0.0
 		features["id_card_detected"] = 0.0
 		features["id_card_confidence"] = 0.0
 		features["id_card_area"] = 0.0
+		features["chain_detected"] = 0.0
+		features["chain_confidence"] = 0.0
+		features["chain_line_count"] = 0.0
 	
 	return features

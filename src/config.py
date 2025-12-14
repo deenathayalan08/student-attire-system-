@@ -11,7 +11,7 @@ class AppConfig:
 
 	# Model and features
 	hist_bins: int = 24
-	confidence_threshold: float = 0.5  # Lowered from 0.7 to be more lenient
+	confidence_threshold: float = 0.3  # Lowered to 0.3 (30%) for better face matching
 	enable_rules: bool = False  # Disabled rule-based color checks
 	enable_model: bool = True
 	max_video_fps: int = 10

@@ -137,45 +137,56 @@ def _infer_missing_items(features: Dict[str, Any], cfg: AppConfig) -> List[Dict[
 		legs_visible = True
 		feet_visible = True
 	
-	# ID Card detection analysis
+	# ID Card detection analysis (using new shape-based detector)
 	id_card_detected = float(features.get("id_card_detected") or 0.0)
 	id_card_confidence = float(features.get("id_card_confidence") or 0.0)
 	id_card_area = float(features.get("id_card_area") or 0.0)
 	
-	# Enhanced detection logic
-	# Shoes detection (VERY LENIENT): consider present if any of these signals
-	# Improved: if feet region has texture, it's likely shoes (not bare feet)
-	# Bare feet typically have higher brightness and lower texture
-	shoes_present = (
-		feet_texture > 10 or  # Any texture indicates shoes (very lenient)
-		feet_brightness < 180 or  # Not extremely bright (bare feet are very bright)
-		feet_v < 180 or  # Not extremely high value
-		feet_mask_area > 0  # Feet region detected
-	)
-	shoes_score = float(np.clip(
-		(feet_texture / 100.0) * 0.5 +  # Texture is most reliable (50% weight)
-		((180 - min(feet_brightness, 180)) / 180.0) * 0.3 +  # Brightness (30% weight)
-		((180 - min(feet_v, 180)) / 180.0) * 0.2,  # Value (20% weight)
-		0.0, 1.0
-	))
+	# Chain/Lanyard detection (indicates ID card is worn around neck)
+	chain_detected = float(features.get("chain_detected") or 0.0)
+	chain_confidence = float(features.get("chain_confidence") or 0.0)
 	
-	# Black shoe detection: black/dark shoes have low saturation (S) in HSV - this is the key indicator
-	# Black shoes can have reflections/lighting that increase brightness/V significantly, so we focus on saturation
-	# Low saturation (< 80) with moderate V/brightness indicates black/dark gray colors
-	# More lenient: if saturation is very low (< 60), it's almost certainly black regardless of brightness
-	# If saturation is moderate (60-80) and V/brightness are not too high, it's likely dark/black
-	# This accounts for lighting variations and reflections on black shoes
-	shoes_black = (
-		(feet_s < 60) or  # Very low saturation = black/dark gray
-		(feet_s < 80 and feet_v < 140 and feet_brightness < 140)  # Low saturation with moderate brightness = dark colors
-	)
-	# Scoring: prioritize low saturation as the main indicator of black
-	black_shoes_score = float(np.clip(
-		((80 - max(feet_s, 0)) / 80.0) * 0.6 +  # Saturation is the key (60% weight)
-		((140 - max(feet_v, 0)) / 140.0) * 0.2 +  # Value (20% weight)
-		((140 - max(feet_brightness, 0)) / 140.0) * 0.2,  # Brightness (20% weight)
-		0.0, 1.0
-	))
+	# Boost ID card confidence if chain is detected (chain indicates ID card is worn)
+	if chain_detected > 0.5 and id_card_confidence > 0.3:
+		id_card_confidence = min(1.0, id_card_confidence * 1.2)  # 20% boost
+	
+	# Enhanced detection logic using new object detectors
+	# Use color-based and shape-based detection instead of texture analysis
+	
+	# Shoes detection using new detector
+	shoes_detected_new = features.get("shoes_detected", 0.0) > 0.5
+	shoes_confidence_new = features.get("shoes_confidence", 0.0)
+	shoes_is_black_new = features.get("shoes_is_black", 0.0) > 0.5
+	shoes_saturation_new = features.get("shoes_saturation", 0.0)
+	
+	# Fallback to old method if new detector not available
+	if shoes_confidence_new > 0.0:
+		# Use new detector results
+		shoes_present = shoes_detected_new
+		shoes_score = shoes_confidence_new
+		shoes_black = shoes_is_black_new
+		black_shoes_score = shoes_confidence_new if shoes_is_black_new else 0.0
+	else:
+		# Fallback to texture-based detection
+		shoes_present = (
+			feet_texture > 10 or
+			feet_brightness < 180 or
+			feet_v < 180 or
+			feet_mask_area > 0
+		)
+		shoes_score = float(np.clip(
+			(feet_texture / 100.0) * 0.5 +
+			((180 - min(feet_brightness, 180)) / 180.0) * 0.3 +
+			((180 - min(feet_v, 180)) / 180.0) * 0.2,
+			0.0, 1.0
+		))
+		shoes_black = (feet_s < 60) or (feet_s < 80 and feet_v < 140 and feet_brightness < 140)
+		black_shoes_score = float(np.clip(
+			((80 - max(feet_s, 0)) / 80.0) * 0.6 +
+			((140 - max(feet_v, 0)) / 140.0) * 0.2 +
+			((140 - max(feet_brightness, 0)) / 140.0) * 0.2,
+			0.0, 1.0
+		))
 	
 	# Bottom wear detection: look for appropriate color and texture
 	# For males: allow any color pants if configured
