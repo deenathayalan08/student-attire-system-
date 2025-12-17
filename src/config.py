@@ -5,13 +5,13 @@ from typing import List
 
 @dataclass
 class AppConfig:
-	# Expected attire hints (keywords used in simple color heuristics)
-	expected_top: str = "white"
-	expected_bottom: str = "dark"
+	# Expected attire style (formal vs casual analysis)
+	expected_top: str = "formal"  # formal, casual, or specific colors
+	expected_bottom: str = "formal"  # formal, casual, or specific colors
 
 	# Model and features
 	hist_bins: int = 24
-	confidence_threshold: float = 0.55  # Balanced threshold for realistic verification
+	confidence_threshold: float = 0.65  # Balanced threshold for formal/casual verification
 	enable_rules: bool = True  # Enable rule-based color checks for realistic verification
 	enable_model: bool = True
 	max_video_fps: int = 10
@@ -34,8 +34,8 @@ class AppConfig:
 	require_kurti_dupatta_for_female: bool = True
 	require_footwear_male: bool = True
 	require_footwear_female: bool = False  # sandals or shoes acceptable; not mandatory
-	require_black_shoes_male: bool = True  # Require black shoes for professional appearance
-	allow_any_color_pants_male: bool = False  # Require dark pants for formal dress code
+	require_formal_shoes: bool = True  # Require formal dress shoes (any professional color)
+	require_formal_attire: bool = True  # Require formal attire vs casual clothing
 	
 	# Security & Safety Features
 	enable_unauthorized_entry_alerts: bool = True

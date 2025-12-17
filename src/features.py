@@ -20,12 +20,8 @@ def _get_pose():
 
 
 def extract_pose(bgr_image: np.ndarray) -> Optional[Any]:
-	if not _mp_ok:
-		return None
-	pose = _get_pose()
-	rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-	res = pose.process(rgb)
-	return res.pose_landmarks if res and res.pose_landmarks else None
+	# DISABLED: MediaPipe has compatibility issues, always return None to use fallback
+	return None
 
 
 def _region_mask_from_pose(image: np.ndarray, landmarks) -> Dict[str, np.ndarray]:

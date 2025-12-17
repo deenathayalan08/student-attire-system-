@@ -570,19 +570,65 @@ def handle_image(image: Image.Image, zone: str, student_id: Optional[str]) -> Di
 				"event_id": None,
 			}
 	
-	bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-	pose = extract_pose(bgr)
-	features = extract_features_from_image(bgr, pose_landmarks=pose, bins=cfg.hist_bins)
-	result = verify_attire_and_safety(features, cfg, st.session_state.classifier)
-
-	annotated = draw_pose_annotations(bgr.copy(), pose)
-	
-	# Add violation indicators
-	violations = result.get("violations", {}).get("violations", [])
-	annotated = draw_violation_indicators(annotated, pose, violations)
-	
-	# Add detailed badge
-	annotated = overlay_detailed_badge(annotated, result)
+	try:
+		bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+		pose = extract_pose(bgr)  # This will return None (MediaPipe disabled)
+		
+		# Use universal formal vs casual analysis
+		st.info("🔍 Using universal formal/casual analysis")
+		from src.verify import verify_attire_universal
+		result = verify_attire_universal(bgr)
+		
+		# Create basic features with simple ID card detection
+		features = extract_features_from_image(bgr, pose_landmarks=None, bins=cfg.hist_bins)
+		
+		# If feature extraction fails, create minimal features
+		if not features:
+			features = {
+				"id_card_detected": 0.0,
+				"id_card_confidence": 0.0,
+				"image_height": bgr.shape[0],
+				"image_width": bgr.shape[1]
+			}
+		
+		# Create simple annotated image (no pose annotations since pose is None)
+		annotated = bgr.copy()
+		
+		# Add violation indicators (works without pose)
+		violations = result.get("violations", {}).get("violations", [])
+		annotated = draw_violation_indicators(annotated, None, violations)
+		
+		# Add detailed badge
+		annotated = overlay_detailed_badge(annotated, result)
+			
+	except Exception as e:
+		st.error(f"❌ Error processing image: {str(e)}")
+		st.info("💡 Using basic fallback...")
+		try:
+			# Try simple analysis as last resort
+			bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+			from src.verify import verify_attire_universal
+			result = verify_attire_universal(bgr)
+			annotated = bgr.copy()  # Simple copy without annotations
+			
+			# Create basic features for ID card detection
+			try:
+				features = extract_features_from_image(bgr, pose_landmarks=None, bins=cfg.hist_bins)
+			except:
+				features = {
+					"id_card_detected": 0.0,
+					"id_card_confidence": 0.0,
+					"image_height": bgr.shape[0],
+					"image_width": bgr.shape[1]
+				}
+		except Exception as e2:
+			st.error(f"❌ Could not analyze image: {str(e2)}")
+			return {
+				"status": "ERROR",
+				"success_score": 0.0,
+				"violations": {"violations": []},
+				"event_id": None,
+			}
 
 	# Save to dataset optionally
 	image_path = None
@@ -943,7 +989,9 @@ def render_video_tab():
 
 		pose = extract_pose(frame)
 		features = extract_features_from_image(frame, pose_landmarks=pose, bins=cfg.hist_bins)
-		result = verify_attire_and_safety(features, cfg, st.session_state.classifier)
+		# Use new clothing-focused verification
+		from src.verify import verify_attire_and_safety_new
+		result = verify_attire_and_safety_new(features, cfg, st.session_state.classifier)
 		annot = draw_pose_annotations(frame.copy(), pose)
 		
 		# Add violation indicators
